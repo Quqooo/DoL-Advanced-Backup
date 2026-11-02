@@ -9,6 +9,10 @@ Full backup and restore for [Degrees of Lewdity](https://gitgud.io/Vrelnir/degre
 - Theoretical compatibility: DoL >= 0.4.2.7 (tested on `0.4.2.7` `0.5.0.5` `0.5.6.10`)
 - Problems caused by changes in the game's own storage structure when restoring data across versions are outside this mod's maintenance scope
 
+> [!Warning]
+>
+> This mod does not guarantee absolutely lossless data. Backup and restore read and write browser storage directly, so a large jump between game versions, an interrupted restore, or a bug in this mod can all leave incomplete data. Export important saves with the game's own export function as well!
+
 ## Features
 
 ### Entry
