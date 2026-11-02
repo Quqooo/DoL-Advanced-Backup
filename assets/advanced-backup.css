@@ -1,0 +1,1197 @@
+.advbk {
+	--advbk-border: var(--700, #45454d);
+	--advbk-border-soft: rgb(255 255 255 / 7%);
+	--advbk-panel: var(--800, #242429);
+	--advbk-panel-deep: var(--900, #1b1b20);
+	--advbk-panel-raised: #2c2c33;
+	--advbk-accent: var(--gold, #d8b46a);
+	--advbk-accent-soft: rgb(216 180 106 / 12%);
+	--advbk-muted: var(--500, #9b9ba4);
+	--advbk-text: var(--white, #e6e2dc);
+	--advbk-danger: #d98d87;
+	box-sizing: border-box;
+	width: 100%;
+	color: var(--advbk-text);
+	font-size: 14px;
+	line-height: 1.45;
+}
+
+.advbk *,
+.advbk *::before,
+.advbk *::after {
+	box-sizing: border-box;
+}
+
+.advbk [hidden] {
+	display: none !important;
+}
+
+.advbk button,
+.advbk select,
+.advbk input {
+	font: inherit;
+}
+
+.advbk button:focus-visible,
+.advbk select:focus-visible,
+.advbk input:focus-visible,
+.advbk label:has(input:focus-visible) {
+	outline: 2px solid var(--advbk-accent);
+	outline-offset: 2px;
+}
+
+.advbk input[type="checkbox"] {
+	width: 15px;
+	height: 15px;
+	margin: 0;
+	accent-color: var(--advbk-accent);
+	cursor: pointer;
+}
+
+.advbk input[type="checkbox"]:disabled {
+	cursor: not-allowed;
+}
+
+/* 与原版分页一致的文字页签；底部金线只承担选中态。 */
+.advbk-subtabs {
+	display: flex;
+	align-items: stretch;
+	justify-content: center;
+	gap: 2px;
+	margin: 0 12px 14px;
+	border-bottom: 1px solid var(--advbk-border);
+}
+
+.advbk-subtab {
+	position: relative;
+	min-width: 88px;
+	padding: 8px 18px 9px;
+	border: 0;
+	background: transparent;
+	color: var(--advbk-muted);
+	cursor: pointer;
+	transition: color 120ms ease, background 120ms ease;
+}
+
+.advbk-subtab::after {
+	position: absolute;
+	right: 16px;
+	bottom: -1px;
+	left: 16px;
+	height: 2px;
+	background: var(--advbk-accent);
+	content: "";
+	opacity: 0;
+	transform: scaleX(.45);
+	transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.advbk-subtab:hover {
+	background: var(--advbk-accent-soft);
+	color: var(--advbk-text);
+}
+
+.advbk-subtab.active {
+	color: var(--advbk-accent);
+	font-weight: 600;
+}
+
+.advbk-subtab.active::after {
+	opacity: 1;
+	transform: scaleX(1);
+}
+
+.advbk-pane-inner,
+.advbk-snapshots {
+	min-width: 0;
+}
+
+.advbk-note {
+	margin: 0 12px 10px;
+	padding: 9px 12px;
+	border: 1px solid var(--advbk-border-soft);
+	border-left: 2px solid var(--advbk-border);
+	border-radius: 3px;
+	background: var(--advbk-panel-deep);
+	color: var(--advbk-muted);
+	text-align: left;
+}
+
+/* 摘要行：体积合计在左，重新扫描在右 */
+.advbk-note-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin: 0 12px 10px;
+}
+
+.advbk-note-row .advbk-note {
+	flex: 1 1 auto;
+	min-width: 0;
+	margin: 0;
+}
+
+/* 文字入口：外形与正文一致，只在悬停时着色加下划线。
+   选择器多一级，才能压过 `.advbk button { font: inherit }` 的 0-1-1。 */
+.advbk .advbk-textlink {
+	flex: none;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: var(--advbk-muted);
+	/* 跟随所在行：摘要行 14px、统计行 12px，不再自成一级字号 */
+	font-size: inherit;
+	letter-spacing: .02em;
+	/* 常态就带下划线，暗示可点；颜色压暗，不抢正文 */
+	text-decoration: underline;
+	text-decoration-color: rgb(255 255 255 / 22%);
+	text-decoration-thickness: 1px;
+	text-underline-offset: 3px;
+	cursor: pointer;
+	transition: color 100ms ease, text-decoration-color 100ms ease;
+}
+
+.advbk-textlink:hover:not(:disabled) {
+	border-color: transparent;
+	background: transparent;
+	color: var(--advbk-accent);
+	text-decoration-color: currentColor;
+}
+
+.advbk-textlink:disabled {
+	cursor: not-allowed;
+	opacity: .45;
+}
+
+.advbk-warning {
+	border-left-color: var(--advbk-accent);
+	background: var(--advbk-accent-soft);
+	color: var(--advbk-text);
+}
+
+/* 预设、合计与树构成同一块工具面板。 */
+.advbk-tree {
+	margin: 0 12px 12px;
+}
+
+.advbk-presets {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px 12px;
+	margin: 0 0 8px;
+}
+
+/* 与右侧分段按钮同字号同色阶：左轻右重会让整行看着歪 */
+.advbk-presets-label {
+	color: var(--advbk-text);
+	font-size: 14px;
+	font-weight: 600;
+	letter-spacing: .02em;
+	text-transform: uppercase;
+}
+
+.advbk-segments {
+	display: inline-flex;
+	overflow: hidden;
+	border: 1px solid var(--advbk-border);
+	border-radius: 4px;
+	background: var(--advbk-panel-deep);
+}
+
+.advbk-segment {
+	min-width: 58px;
+	padding: 5px 12px;
+	border: 0;
+	/* 分隔线画在左侧：末项无论是否隐藏，右边缘都不会多出一条压边的线 */
+	border-left: 1px solid var(--advbk-border-soft);
+	background: transparent;
+	color: var(--advbk-muted);
+	cursor: pointer;
+}
+
+.advbk-segment:first-child {
+	border-left: 0;
+}
+
+/* 游戏本体的 button:hover 会把 border-color 改成白色，这里必须显式写回，
+   否则唯一可见的那条分隔线会被染白——高亮应当落在下方，不是右侧。 */
+.advbk-segment:hover {
+	border-color: transparent;
+	border-left-color: var(--advbk-border-soft);
+	background: var(--advbk-panel-raised);
+	box-shadow: inset 0 -2px rgb(255 255 255 / 16%);
+	color: var(--advbk-text);
+}
+
+.advbk-segment.active,
+.advbk-presets .advbk-segment.active {
+	background: var(--advbk-accent-soft);
+	color: var(--advbk-accent);
+	font-weight: 600;
+	text-decoration: none;
+	box-shadow: inset 0 -2px var(--advbk-accent);
+}
+
+/* 自定义与三档同款，只是不可点 */
+.advbk-presets-custom {
+	cursor: default;
+}
+
+.advbk-selection {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	min-height: 25px;
+	margin: 0 0 8px;
+	padding: 0 2px;
+	color: var(--advbk-muted);
+	font-size: 12px;
+	text-align: left;
+}
+
+.advbk-selection-text {
+	display: inline-flex;
+	flex: 1 1 auto;
+	align-items: center;
+	min-width: 0;
+}
+
+.advbk-selection-text::before {
+	width: 5px;
+	height: 5px;
+	margin-right: 7px;
+	border-radius: 50%;
+	background: var(--advbk-accent);
+	content: "";
+	box-shadow: 0 0 7px rgb(216 180 106 / 30%);
+}
+
+.advbk-views {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: 10px;
+}
+
+.advbk-tree-body {
+	position: relative;
+	overflow: hidden;
+	border: 1px solid var(--advbk-border);
+	border-radius: 5px;
+	background: var(--advbk-panel-deep);
+	box-shadow: 0 5px 18px rgb(0 0 0 / 16%);
+}
+
+/*
+ * 加载中：整块区域扫过一道光带。
+ *
+ * 光带画在 200% 宽的伪元素上，平移量取「两端都完全移出」的那一段（-82% → 32%）：
+ * 起点与终点都不露半条光带，所以回头那一下看不见；行程恰好覆盖可见窗口，中间也不留空档。
+ * 只动 `transform`，走合成层，几百行的树也只多一层，不逐行重绘。
+ */
+.advbk-tree-body[data-advbk-loading]::after {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: 200%;
+	background-image: linear-gradient(
+		100deg,
+		transparent 18%,
+		rgb(216 180 106 / 3%) 30%,
+		rgb(216 180 106 / 6%) 40%,
+		rgb(216 180 106 / 10%) 50%,
+		rgb(216 180 106 / 6%) 60%,
+		rgb(216 180 106 / 3%) 70%,
+		transparent 82%
+	);
+	animation: advbk-sweep 2.6s linear infinite;
+	content: "";
+	pointer-events: none;
+	will-change: transform;
+}
+
+@keyframes advbk-sweep {
+	from {
+		transform: translateX(-82%);
+	}
+
+	to {
+		transform: translateX(32%);
+	}
+}
+
+.advbk-group {
+	margin: 0;
+	border: 0;
+	border-bottom: 1px solid var(--advbk-border);
+	background: transparent;
+}
+
+.advbk-group:last-child {
+	border-bottom: 0;
+}
+
+.advbk-group-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-height: 42px;
+	margin: 0;
+	padding: 7px 11px 7px 9px;
+	background: var(--advbk-panel);
+	color: var(--advbk-text);
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.advbk-group[data-level="0"] > .advbk-group-title {
+	letter-spacing: .025em;
+}
+
+.advbk-group-content {
+	position: relative;
+	margin-left: 20px;
+	padding: 3px 0 5px;
+	border-left: 1px solid var(--advbk-border);
+}
+
+/* 子级不再重复画一张卡；缩进与引用线统一由 .advbk-group-content 给出，右侧不跟着缩 */
+.advbk-group .advbk-group {
+	margin: 4px 0 6px;
+	border: 0;
+	border-radius: 0;
+}
+
+.advbk-group .advbk-group:last-child {
+	margin-bottom: 3px;
+}
+
+.advbk-group .advbk-group > .advbk-group-title {
+	min-height: 35px;
+	padding: 5px 8px 5px 9px;
+	background: var(--advbk-panel-deep);
+	color: var(--advbk-muted);
+	font-size: 13px;
+}
+
+.advbk-disclosure {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	border: 0;
+	border-radius: 3px;
+	background: transparent;
+	color: var(--advbk-muted);
+	cursor: pointer;
+}
+
+.advbk-disclosure:hover {
+	background: var(--advbk-accent-soft);
+	color: var(--advbk-accent);
+}
+
+.advbk-disclosure-icon {
+	width: 7px;
+	height: 7px;
+	border-right: 1.5px solid currentcolor;
+	border-bottom: 1.5px solid currentcolor;
+	transform: translateY(-1px) rotate(45deg);
+	transition: transform 120ms ease;
+}
+
+.advbk-disclosure[aria-expanded="false"] .advbk-disclosure-icon {
+	transform: translateX(-1px) rotate(-45deg);
+}
+
+.advbk-check {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	cursor: pointer;
+}
+
+.advbk-group-check {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.advbk-group-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.advbk-group-meta {
+	/* 下界不是定宽：`≥ 179.5 MB` 这类比一列还长，写死就会裁掉半个字。
+	   拓宽出来的空间由组名让（`.advbk-group-check` 是 flex:1，名字自己省略） */
+	flex: none;
+	min-width: 92px;
+	margin-left: auto;
+	color: var(--advbk-muted);
+	font-size: 11px;
+	font-weight: 400;
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+	white-space: nowrap;
+}
+
+.advbk-row {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	min-width: 0;
+	padding: 7px 12px;
+	border-bottom: 1px solid var(--advbk-border-soft);
+	transition: background 100ms ease;
+}
+
+.advbk-row:last-child {
+	border-bottom: 0;
+}
+
+.advbk-leaf {
+	position: relative;
+	margin: 0;
+	padding: 7px 8px;
+	border: 0;
+	border-radius: 3px;
+	cursor: pointer;
+}
+
+/* 8px 短横线接到上级引用线上，归属一眼可见 */
+.advbk-group-content > .advbk-node > .advbk-leaf::before,
+.advbk-group-content > .advbk-leaf::before {
+	position: absolute;
+	top: 50%;
+	left: 0;
+	width: 8px;
+	height: 1px;
+	background: var(--advbk-border);
+	content: "";
+}
+
+.advbk-leaf-gutter {
+	flex: none;
+	width: 22px;
+}
+
+.advbk-leaf:hover {
+	background: var(--advbk-accent-soft);
+}
+
+.advbk-leaf-main {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.advbk-leaf-line {
+	display: flex;
+	align-items: center;
+	min-width: 0;
+}
+
+.advbk-row-label {
+	overflow: hidden;
+	min-width: 0;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 单元第二行：模组「v1.0.0 | 描述」、存档时间 */
+.advbk-leaf-sub {
+	display: block;
+	overflow: hidden;
+	margin-top: 2px;
+	color: var(--advbk-muted);
+	font-size: 11px;
+	line-height: 1.35;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 恢复页的版本对照：包内更新显绿、会降级显红 */
+.advbk-ver-up {
+	color: #86b98a;
+}
+
+.advbk-ver-down {
+	color: #d98d87;
+}
+
+/* 来源标签与名称之间留一口气，否则 [IDB]AdvancedBackup 会粘在一起 */
+.advbk-leaf-line {
+	gap: 6px;
+	align-items: center;
+}
+
+.advbk-key-tag {
+	position: relative;
+	/* 10px 等宽大写挨着 14px 正文：盒子居中了，字形重心仍偏高，压 1px 找齐 */
+	top: 1px;
+	flex: none;
+	color: rgb(216 180 106 / 62%);
+	font-family: Consolas, monospace;
+	font-size: 10px;
+}
+
+/* 体积一列，等宽数字右对齐；内容比一列长时整列左扩，行名跟着让位 */
+.advbk-row-size {
+	flex: none;
+	min-width: 92px;
+	color: var(--advbk-muted);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+	white-space: nowrap;
+}
+
+.advbk-badge {
+	flex: none;
+	/* 贴在行尾、体积列之前 */
+	margin-left: auto;
+	padding: 0 4px;
+	border: 1px solid var(--advbk-border);
+	border-radius: 3px;
+	color: var(--advbk-muted);
+	font-size: 10px;
+	font-weight: 400;
+	line-height: 16px;
+}
+
+.advbk-row-meta {
+	flex: none;
+	max-width: 42%;
+	color: var(--advbk-muted);
+	font-size: 11px;
+	text-align: right;
+	white-space: nowrap;
+}
+
+.advbk-row-disabled {
+	opacity: .42;
+	cursor: not-allowed;
+}
+
+.advbk-row-disabled:hover {
+	background: transparent;
+}
+
+.advbk-pagination {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	margin: 6px 12px 3px;
+	color: var(--advbk-muted);
+	font-size: 11px;
+}
+
+.advbk-page-button {
+	padding: 2px 7px;
+	border: 0;
+	background: transparent;
+	color: var(--advbk-accent);
+	cursor: pointer;
+}
+
+.advbk-page-button:disabled {
+	color: var(--advbk-muted);
+	cursor: default;
+	opacity: .4;
+}
+
+/* 页码可点：点开原地变成输入框，回车跳页 */
+.advbk-page-jump {
+	padding: 2px 4px;
+	border-radius: 3px;
+	cursor: pointer;
+}
+
+.advbk-page-jump:hover,
+.advbk-page-jump:focus-visible {
+	color: var(--advbk-text);
+	background: var(--advbk-accent-soft);
+}
+
+.advbk-page-input {
+	width: 3.4em;
+	padding: 1px 4px;
+	border: 1px solid var(--advbk-border-soft);
+	border-radius: 3px;
+	background: var(--advbk-panel-deep);
+	color: var(--advbk-text);
+	font: inherit;
+	text-align: center;
+}
+
+.advbk-page-input:focus {
+	outline: 1px solid var(--advbk-accent);
+	outline-offset: 0;
+}
+
+.advbk-control-section {
+	margin: 0 12px 12px;
+	padding: 10px 12px;
+	border: 1px solid var(--advbk-border-soft);
+	border-radius: 4px;
+	background: var(--advbk-panel-deep);
+}
+
+.advbk-control-title {
+	margin: 0 0 8px;
+	color: var(--advbk-muted);
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: .06em;
+}
+
+.advbk-options {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px 22px;
+	color: var(--advbk-muted);
+	font-size: 12px;
+}
+
+.advbk-option {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+}
+
+/* 带 (?) 的选项行：前导空格是独立文本节点，在 flex 里自成一项，
+   行 gap 会在文字与 (?) 之间叠两次。这里只留那个空格，与原版一致。 */
+.advbk-option-tip {
+	gap: 0;
+}
+
+/* (?) 带原版 `.tooltip-anchor` 的 1px 下边框：同一行里只有它比文字高 1px，
+   `.advbk-options` 的 `align-items: center` 会把这行整体居中，
+   于是行内文字比隔壁低 0.5px、整行多 1px，卡片跟着被撑高。
+   只删边框会同时丢掉原版的虚线提示，所以改用背景画同一条线：
+   视觉一致，不参与布局，行高与相邻选项相同。
+   `background-image` 而不是 `border-bottom`：后者会计入盒子高度。 */
+.advbk-option-tip .tooltip-anchor {
+	border-bottom: 0;
+	background-image: repeating-linear-gradient(
+		90deg,
+		var(--tooltip-border, currentColor) 0 1px,
+		transparent 1px 2px
+	);
+	background-repeat: no-repeat;
+	background-position: bottom left;
+	background-size: 100% 1px;
+}
+
+/* 当前档位下用不了的选项：只压暗，不移除，避免选项行跳动 */
+.advbk-option-disabled {
+	opacity: .45;
+	cursor: not-allowed;
+}
+
+/* 包里有、但这台机器不该恢复的条目（快照库）：留位置、只压暗，勾选框自己也是禁用的 */
+.advbk-row-locked {
+	opacity: .55;
+}
+
+.advbk-row-locked input[type="checkbox"] {
+	cursor: not-allowed;
+}
+
+.advbk select,
+.advbk-input {
+	min-height: 30px;
+	padding: 4px 28px 4px 8px;
+	border: 1px solid var(--advbk-border);
+	border-radius: 3px;
+	background: var(--advbk-panel-raised);
+	color: var(--advbk-text);
+	font: inherit;
+}
+
+.advbk-input {
+	width: 100%;
+	padding-right: 8px;
+}
+
+.advbk-source-controls {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+}
+
+.advbk-source-controls select {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.advbk-source-section .advbk-note {
+	margin: 0 0 9px;
+	padding: 0;
+	border: 0;
+	background: transparent;
+}
+
+.advbk-mode-row {
+	margin-bottom: 10px;
+}
+
+.advbk-actions {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: center;
+	gap: 9px;
+	margin: 12px;
+}
+
+.advbk-actions-primary .advbk-primary {
+	flex: 1 1 100%;
+	width: 100%;
+}
+
+.advbk button.macro-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 32px;
+	padding: 5px 15px;
+	border: 1px solid var(--advbk-border);
+	border-radius: 4px;
+	background: var(--advbk-panel-raised);
+	color: var(--advbk-text);
+	text-decoration: none;
+	cursor: pointer;
+	transition: border-color 100ms ease, background 100ms ease, color 100ms ease;
+}
+
+.advbk button.macro-button:hover:not(:disabled) {
+	border-color: var(--advbk-accent);
+	background: var(--advbk-accent-soft);
+	color: var(--advbk-accent);
+}
+
+.advbk button.macro-button:disabled {
+	cursor: not-allowed;
+	opacity: .45;
+}
+
+.advbk button.advbk-primary {
+	border-color: var(--advbk-accent);
+	background: var(--advbk-accent);
+	color: #1b1b20;
+	font-weight: 600;
+}
+
+.advbk button.advbk-primary:hover:not(:disabled) {
+	background: var(--advbk-text);
+	color: #1b1b20;
+}
+
+.advbk-progress {
+	display: grid;
+	grid-template-columns: auto minmax(80px, 1fr) auto;
+	align-items: center;
+	gap: 10px;
+	/* 在按钮上方：上下留白交给相邻块自身的 margin，这里不再加 */
+	margin: 0 12px;
+	padding: 9px 11px;
+	border: 1px solid var(--advbk-border-soft);
+	border-radius: 4px;
+	background: var(--advbk-panel-deep);
+	color: var(--advbk-muted);
+	font-size: 12px;
+}
+
+.advbk-progress-track {
+	overflow: hidden;
+	height: 5px;
+	border-radius: 5px;
+	background: var(--advbk-panel-raised);
+}
+
+.advbk-progress-fill {
+	width: 0;
+	height: 100%;
+	border-radius: inherit;
+	background: var(--advbk-accent);
+	box-shadow: 0 0 8px rgb(216 180 106 / 30%);
+	transition: width 140ms ease;
+}
+
+/* 警告与错误：常驻在动作按钮上方，按级别染色，右侧「确定」逐条消除 */
+.advbk-notices {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin: 0 12px 10px;
+}
+
+.advbk-notices:empty {
+	display: none;
+}
+
+.advbk-notice {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 9px 12px;
+	border: 1px solid var(--advbk-border-soft);
+	border-left: 2px solid var(--advbk-border);
+	border-radius: 3px;
+	background: var(--advbk-panel-deep);
+	color: var(--advbk-text);
+	font-size: 12px;
+}
+
+.advbk-notice-warn {
+	border-left-color: var(--advbk-accent);
+	background: var(--advbk-accent-soft);
+}
+
+.advbk-notice-error {
+	border-left-color: var(--advbk-danger);
+	background: rgb(217 141 135 / 8%);
+}
+
+.advbk-notice-text {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.advbk-notice .advbk-textlink {
+	/* 不要再加 margin-top：按钮会相对正文下沉，单行时看着不居中 */
+	/* 常驻条的消除入口要看得见：正文色而不是摘要行那种压暗的灰 */
+	color: var(--advbk-text);
+	text-decoration-color: rgb(255 255 255 / 40%);
+}
+
+/* 一般提示：屏幕下方短暂显示。游戏原生的提示在屏幕上方，这里刻意放到底部 */
+.advbk-toast {
+	position: fixed;
+	/* 用左右 0 + 自动外边距居中：`left: 50%` 会把滚动条宽度也算进去，实测偏 8px */
+	left: 0;
+	right: 0;
+	bottom: 26px;
+	z-index: 1100;
+	width: fit-content;
+	max-width: min(440px, 86vw);
+	margin: 0 auto;
+	padding: 7px 14px;
+	border: 1px solid #45454d;
+	border-radius: 3px;
+	background: rgb(27 27 32 / 94%);
+	box-shadow: 0 8px 22px rgb(0 0 0 / 45%);
+	color: #e6e2dc;
+	font-size: 12px;
+	line-height: 1.5;
+	text-align: center;
+	overflow-wrap: anywhere;
+	/* 不挡点击：它只是通知，底下可能正开着对话框或列表 */
+	pointer-events: none;
+	transform: translateY(6px);
+	opacity: 0;
+	transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.advbk-toast-open {
+	transform: none;
+	opacity: 1;
+}
+
+.advbk-errors {
+	margin: 0 12px 12px;
+	border: 1px solid var(--advbk-danger);
+	border-radius: 4px;
+	background: rgb(217 141 135 / 7%);
+}
+
+.advbk-errors:empty {
+	display: none;
+}
+
+.advbk-error {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin: 0;
+	padding: 7px 10px;
+	color: var(--advbk-danger);
+	font-size: 12px;
+}
+
+.advbk-error-text {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.advbk-retry {
+	flex: none;
+}
+
+/* 快照使用双行卡片，避免时间、体积和四个操作挤在一行。 */
+.advbk-snapshots > .advbk-body {
+	margin: 0 12px 12px;
+}
+
+.advbk-snapshots .advbk-group {
+	overflow: hidden;
+	margin-bottom: 10px;
+	border: 1px solid var(--advbk-border);
+	border-radius: 5px;
+	background: var(--advbk-panel-deep);
+}
+
+.advbk-snapshots .advbk-group-title {
+	min-height: 36px;
+	border-bottom: 1px solid var(--advbk-border-soft);
+	font-size: 13px;
+}
+
+.advbk-snapshot-main {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.advbk-snapshot-main .advbk-row-label {
+	display: block;
+	color: var(--advbk-text);
+	font-weight: 500;
+}
+
+.advbk-snapshot-main .advbk-row-meta {
+	display: block;
+	max-width: none;
+	margin-top: 2px;
+	text-align: left;
+	white-space: normal;
+}
+
+.advbk-row-actions {
+	display: flex;
+	flex: none;
+	flex-wrap: wrap;
+	justify-content: flex-end;
+	gap: 4px;
+}
+
+/* 原版 .macro-button 是整宽块级：不收回宽度，四个按钮会各占一行 */
+.advbk-row-actions button.macro-button {
+	flex: none;
+	width: auto;
+	min-height: 24px;
+	padding: 2px 10px;
+	font-size: 12px;
+	white-space: nowrap;
+}
+
+/* 删除不可逆：红框红字，与其余三个分开 */
+.advbk-row-actions button.advbk-danger {
+	border-color: var(--advbk-danger);
+	color: var(--advbk-danger);
+}
+
+.advbk-row-empty {
+	justify-content: center;
+	min-height: 43px;
+	color: var(--advbk-muted);
+	font-size: 12px;
+	font-style: italic;
+}
+
+.advbk-dialog-actions {
+	display: flex;
+	justify-content: center;
+	gap: 8px;
+	margin-top: 10px;
+}
+
+/* 纯文字说明：没有边框与底色。说明块（.advbk-note）是给状态行用的，套在一句解释上像输入框 */
+.advbk-hint {
+	margin: 0 0 10px;
+	color: var(--advbk-muted);
+	font-size: 12px;
+	line-height: 1.55;
+}
+
+/* 「其他」页：语义细则。全部时四张模式卡两两并排（2×2），窄屏变为一列 */
+.advbk-spec-list {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 8px;
+}
+
+.advbk-spec {
+	padding: 10px 12px;
+	border: 1px solid var(--advbk-border);
+	border-radius: 5px;
+	background: var(--advbk-panel-deep);
+}
+
+.advbk-spec-title {
+	margin: 0 0 8px;
+	color: var(--advbk-accent);
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.advbk-spec-rows {
+	display: grid;
+	margin: 0;
+	grid-template-columns: auto minmax(0, 1fr);
+	column-gap: 12px;
+	row-gap: 6px;
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+/* 左明右暗、右对齐：读起来像一张「数据项 …… 行为」的对照表 */
+.advbk-spec-rows dt {
+	color: var(--advbk-text);
+}
+
+.advbk-spec-rows dd {
+	margin: 0;
+	color: var(--advbk-muted);
+	text-align: right;
+}
+
+/* 只显示一个模式：一项一行，不再一项一个框 */
+.advbk-spec-list.is-single {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	gap: 0;
+	border: 1px solid var(--advbk-border);
+	border-radius: 5px;
+	background: var(--advbk-panel-deep);
+}
+
+.advbk-spec-list.is-single .advbk-spec {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 16px;
+	padding: 9px 12px;
+	border: 0;
+	border-bottom: 1px solid var(--advbk-border-soft);
+	border-radius: 0;
+	background: transparent;
+}
+
+.advbk-spec-list.is-single .advbk-spec:last-child {
+	border-bottom: 0;
+}
+
+.advbk-spec-name {
+	color: var(--advbk-text);
+	font-size: 12px;
+}
+
+.advbk-spec-value {
+	color: var(--advbk-muted);
+	font-size: 12px;
+	text-align: right;
+}
+
+@media (max-width: 680px) {
+	.advbk {
+		font-size: 13px;
+	}
+
+	.advbk-spec-list {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.advbk-subtabs,
+	.advbk-tree,
+	.advbk-note,
+	.advbk-control-section,
+	.advbk-actions,
+	.advbk-progress,
+	.advbk-notices,
+	.advbk-errors,
+	.advbk-snapshots > .advbk-body {
+		margin-right: 6px;
+		margin-left: 6px;
+	}
+
+	.advbk-subtab {
+		flex: 1 1 0;
+		min-width: 0;
+		padding-right: 10px;
+		padding-left: 10px;
+	}
+
+	.advbk-group-meta {
+		font-size: 10px;
+	}
+
+	.advbk-leaf {
+		align-items: flex-start;
+	}
+
+	.advbk-leaf > input {
+		margin-top: 3px;
+	}
+
+	.advbk-row-meta {
+		max-width: 36%;
+		white-space: normal;
+	}
+
+	.advbk-group-meta,
+	.advbk-row-size {
+		min-width: 74px;
+	}
+
+	.advbk-source-controls {
+		align-items: stretch;
+		flex-direction: column;
+	}
+
+	/* 原版 .macro-button 自带宽度与 max-width，align-items: stretch 无法改变其宽度；两个入口各占一行时都需要写满 */
+	.advbk .advbk-source-controls > button.macro-button,
+	.advbk .advbk-source-controls > select {
+		box-sizing: border-box;
+		width: 100%;
+		max-width: none;
+	}
+
+	.advbk-snapshots .advbk-row:not(.advbk-row-empty) {
+		align-items: flex-start;
+		flex-direction: column;
+	}
+
+	.advbk-row-actions {
+		justify-content: flex-start;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.advbk *,
+	.advbk *::before,
+	.advbk *::after {
+		transition: none !important;
+	}
+
+	/* 减弱动效：扫光退成一层静态淡色，仍然看得出「在加载」 */
+	.advbk-tree-body[data-advbk-loading]::after {
+		background: rgb(216 180 106 / 5%);
+		animation: none;
+	}
+}
+

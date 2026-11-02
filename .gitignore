@@ -1,0 +1,14 @@
+node_modules/
+dist/
+test-output/
+*.log
+docs/
+
+scripts/test/
+scripts/bench/
+scripts/bench-*.mjs
+scripts/e2e.mjs
+scripts/e2e-matrix.mjs
+scripts/probes.mjs
+scripts/lib/unit.mjs
+scripts/lib/zip-info.mjs

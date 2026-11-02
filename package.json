@@ -1,0 +1,21 @@
+{
+  "name": "dol-advanced-backup",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Advanced backup and restore for Degrees of Lewdity (ModLoader mod)",
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "pack": "node scripts/build.mjs && node scripts/pack.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.9",
+    "fflate": "^0.8.2",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "@bokuweb/zstd-wasm": "^0.0.27",
+    "xxhash-wasm": "^1.1.0"
+  }
+}
