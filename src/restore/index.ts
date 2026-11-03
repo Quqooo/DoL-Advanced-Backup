@@ -1,4 +1,5 @@
 import type { Item } from '../core/item';
+import { verifySectionIndex } from './plan/sections';
 import type { RestoreMode } from '../core/types';
 import { applyPlan } from './apply';
 import { openBundle, type Bundle } from './bundle';
@@ -49,6 +50,7 @@ export async function restorePackage(input: RestoreInput): Promise<RestoreOutcom
   plan.sections = await plan.loadSections(
     progress ? (ratio: number) => progress({ phase: 'compare', ratio: 0.05 + ratio * 0.95 }) : undefined,
   );
+  verifySectionIndex(bundle, plan.sections);
   await input.onBeforeWrite?.(plan);
   const selected = input.selected ?? plan.available;
   const report = await applyPlan({

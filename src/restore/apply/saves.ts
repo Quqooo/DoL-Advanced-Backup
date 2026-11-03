@@ -3,7 +3,6 @@ import { messageError } from '../../core/error';
 import type { Item } from '../../core/item';
 import { decodeValue } from '../../pack/encode';
 import {
-  readDetails,
   readLegacy,
   writeLegacy,
   writeSaves,
@@ -23,7 +22,6 @@ export async function applySaves(state: ApplyState): Promise<void> {
   const section = state.plan.sections.saves;
   if (!section) return;
 
-  const local = new Map((await readDetails()).map(record => [record.slot, record]));
   const writes: SaveRecord[] = [];
   const detailWrites: SaveRecord[] = [];
   const applied: Item[] = [];
@@ -42,11 +40,6 @@ export async function applySaves(state: ApplyState): Promise<void> {
       continue;
     }
     const detail = section.details.find(entry => entry.slot === slot);
-    // 补缺只补「本机没有的槽」：同槽不覆盖，也不比日期——比日期就成了「补新的」，那是另一个模式
-    if (state.plan.mode === 'missing' && local.has(slot)) {
-      bump(state.report, item, 'skipped');
-      continue;
-    }
     const data = asRecord(decodeValue(record.data, state.resolve));
     if (!data) {
       fail(state.report, 'saves', item.addr, messageError('saveUndecodable'));
@@ -60,8 +53,8 @@ export async function applySaves(state: ApplyState): Promise<void> {
 
   if (writes.length === 0) return;
   try {
-    await writeSaves(writes, detailWrites);
-    for (const item of applied) bump(state.report, item, 'applied');
+    const written = await writeSaves(writes, detailWrites, state.plan.mode === 'missing');
+    for (const item of applied) bump(state.report, item, written.has(slotOfAddr(item.addr)!) ? 'applied' : 'skipped');
   } catch (error) {
     fail(state.report, 'saves', messageError('labelSaveDb'), error);
   }

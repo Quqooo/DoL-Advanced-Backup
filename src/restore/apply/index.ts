@@ -1,15 +1,16 @@
-import { nameOfAddr } from '../../core/address';
-import { throwIfAborted } from '../../core/error';
+import { nameOfAddr, slotOfAddr } from '../../core/address';
+import { messageError, throwIfAborted } from '../../core/error';
+import { verifySectionIndex } from '../plan/sections';
 import type { Item } from '../../core/item';
 import type { Category } from '../../core/types';
-import { collectBlobRefs } from '../../pack/encode';
+import { collectBlobRefs, decodeValue } from '../../pack/encode';
 import { databases } from '../../store/idb';
 import { removePendingDrop } from '../../store/pending-drop';
 import { loadBlobs } from '../bundle';
 import { mirrorPlan } from '../clean';
 import { mirrorCandidates, mirrorScopeOf } from '../plan';
 import type { RestorePlan, RestoreReport } from '../types';
-import { applyDbs } from './dbs';
+import { applyDbs, openDbSections } from './dbs';
 import { applyKeys } from './keys';
 import { applyMods, reconcileModOrder } from './mods';
 import { applyLegacy, applySaves } from './saves';
@@ -26,25 +27,44 @@ interface Step {
   run: () => Promise<void>;
 }
 
-/**
- * 这次真正会用到的数据块；`null` 表示「全都要」。
- *
- * 整库分区动辄几十 MB，无条件全量预载等于把包再展开一遍；只恢复一个存档槽时
- * 那些 `data/*.bin` 一个都用不上。引用只可能出现在两个分区里：存档与整库。
- *
- * 整库在写入时逐库切片解析（`applyDbs`），分区里只有骨架，扫不出引用。
- * 选中整库时这些数据块基本都要用，因此直接全载：漏认一个会导致解码得到 null，
- * 代价高于多载几十 MB。
- */
-function blobRefsOf(plan: RestorePlan, selected: ReadonlySet<string>): Set<string> | null {
-  const kinds = new Set<Item['kind']>();
-  for (const item of plan.items) {
-    if (selected.has(item.addr)) kinds.add(item.kind);
+/** 写入前逐库预检；只累计选中载荷引用的块，不保留全分区对象图。 */
+async function validatePayloads(plan: RestorePlan, selected: ReadonlySet<string>): Promise<Map<string, Uint8Array>> {
+  verifySectionIndex(plan.bundle, plan.sections);
+  const blobs = new Map<string, Uint8Array>();
+  const loadRefs = async (value: unknown): Promise<void> => {
+    const refs = new Set<string>();
+    collectBlobRefs(value, refs);
+    for (const file of blobs.keys()) refs.delete(file);
+    for (const [file, bytes] of await loadBlobs(plan.bundle, refs)) blobs.set(file, bytes);
+  };
+  const resolve = (file: string): Uint8Array | null => blobs.get(file) ?? null;
+  let sectionOf: Awaited<ReturnType<typeof openDbSections>> | undefined;
+  for (const addr of selected) {
+    const item = plan.items.find(item => item.addr === addr);
+    if (!item) throw messageError('bundleAddressMismatch');
+    if (item.kind === 'save') {
+      const slot = slotOfAddr(addr);
+      const record = plan.sections.saves?.saves.find(record => record.slot === slot);
+      if (!record) throw messageError('bundleAddressMismatch');
+      await loadRefs(record.data);
+      decodeValue(record.data, resolve);
+      const detail = plan.sections.saves?.details.find(record => record.slot === slot);
+      if (detail) {
+        await loadRefs(detail.data);
+        decodeValue(detail.data, resolve);
+      }
+    } else if (item.kind === 'idb') {
+      sectionOf ??= await openDbSections(plan);
+      const db = sectionOf(nameOfAddr(addr) ?? '');
+      await loadRefs(db);
+      // 每条解码结果立即释放，不额外构造整库解码对象图。
+      for (const store of db.stores) for (const record of store.records) {
+        decodeValue(record.key, resolve);
+        decodeValue(record.value, resolve);
+      }
+    }
   }
-  const refs = new Set<string>();
-  if (kinds.has('save') || kinds.has('save-legacy')) collectBlobRefs(plan.sections.saves, refs);
-  if (kinds.has('idb')) return null;
-  return refs;
+  return blobs;
 }
 
 /**
@@ -86,7 +106,7 @@ export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
     input.onProgress?.({ ratio, ...(label ? { label } : {}) });
   };
   emit(0);
-  const blobs = await loadBlobs(input.plan.bundle, blobRefsOf(input.plan, input.selected) ?? undefined);
+  const blobs = await validatePayloads(input.plan, input.selected);
   emit(LOAD_END);
 
   // 缺省豁免：与下面镜像用的是同一个值

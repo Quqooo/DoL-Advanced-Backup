@@ -1,4 +1,5 @@
 import { parseJson } from '../../core/json';
+import { messageError } from '../../core/error';
 import {
   extract,
   findValueStart,
@@ -99,5 +100,26 @@ export async function readSections(
     done += weight;
     onProgress?.(total > 0 ? done / total : 1);
   }
+  verifySectionIndex(bundle, sections);
   return sections;
+}
+
+/** 真正的载荷地址必须与索引相同且唯一，不能以数量相等代替。 */
+export function verifySectionIndex(bundle: Bundle, sections: PackageSections): void {
+  const same = (actual: readonly (string | number)[], expected: readonly (string | number)[]): void => {
+    const addresses = new Set(actual);
+    if (addresses.size !== actual.length || new Set(expected).size !== expected.length
+      || actual.length !== expected.length || expected.some(addr => !addresses.has(addr))) throw messageError('bundleAddressMismatch');
+  };
+  const index = bundle.manifest.index;
+  same((sections.keys?.items ?? []).map(item => item.a), index.keys.map(item => item.a));
+  same((sections.saves?.saves ?? []).map(item => item.slot), index.saves.map(item => item.slot));
+  same((sections.idb?.dbs ?? []).map(item => item.name), index.dbs.map(item => item.name));
+  const details = (sections.saves?.details ?? []).map(item => item.slot);
+  if (new Set(details).size !== details.length || details.some(slot => !index.saves.some(item => item.slot === slot))
+    || Boolean(sections.saves?.legacy?.saves !== null && sections.saves?.legacy?.saves !== undefined) !== index.legacy) throw messageError('bundleAddressMismatch');
+  for (const db of sections.idb?.dbs ?? []) {
+    const names = db.stores.map(store => store.name);
+    if (new Set(names).size !== names.length) throw messageError('bundleAddressMismatch');
+  }
 }

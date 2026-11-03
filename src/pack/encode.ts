@@ -1,5 +1,6 @@
 import { base64ToBytes, bytesToBase64 } from '../core/format';
 import { BlobTable } from './blob';
+import { messageError } from '../core/error';
 
 const BLOB = '$ab:blob';
 /** 打包块里的偏移与长度：`$ab:blob` 指向整条 `data/images.bin` 时用它定位 */
@@ -230,7 +231,7 @@ function encodeNode(value: unknown, blobs: BlobTable, source: string, seen: Weak
     const entries = Object.entries(record);
     // 自带 `$ab:` 开头的键：不转义的话解码会把它当类型标记，整个对象变成别的东西
     const reserved = entries.some(([key]) => key.startsWith(PREFIX));
-    const out: Record<string, unknown> = {};
+    const out: Record<string, unknown> = Object.create(null);
     const pending = encodeEach(
       entries,
       ([key, item]) => encodeNode(item, blobs, `${source}/${key}`, seen),
@@ -284,13 +285,13 @@ function ownBuffer(bytes: Uint8Array): ArrayBuffer {
 function makeView(name: string, bytes: Uint8Array): unknown {
   const buffer = ownBuffer(bytes);
   if (name === 'DataView') return new DataView(buffer);
+  const allowed = ['Int8Array', 'Uint8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array', 'Int32Array', 'Uint32Array', 'Float32Array', 'Float64Array', 'BigInt64Array', 'BigUint64Array'];
   const ctor = (globalThis as Record<string, unknown>)[name];
-  if (typeof ctor !== 'function') return bytes;
+  if (!allowed.includes(name) || typeof ctor !== 'function') throw messageError('blobInvalid');
   try {
     return new (ctor as new (buffer: ArrayBuffer) => unknown)(buffer);
   } catch {
-    // 字节长度与元素大小不整除（包被改过）时不猜类型，退回原始字节
-    return bytes;
+    throw messageError('blobInvalid');
   }
 }
 
@@ -302,7 +303,7 @@ export function decodeValue(value: unknown, resolve: BlobResolver): unknown {
   const record = value as Record<string, unknown>;
   // 转义层先认：它把普通对象的 `$ab:` 键包在里面，其余标记都在外面
   if (isEscapedObject(record)) {
-    const out: Record<string, unknown> = {};
+    const out: Record<string, unknown> = Object.create(null);
     for (const [key, item] of Object.entries(record[OBJ])) out[key] = decodeValue(item, resolve);
     return out;
   }
@@ -335,18 +336,22 @@ export function decodeValue(value: unknown, resolve: BlobResolver): unknown {
       return new RegExp(source);
     }
   }
+  if (Object.prototype.hasOwnProperty.call(record, BLOB) && typeof record[BLOB] !== 'string') throw messageError('blobInvalid');
+  if (Object.prototype.hasOwnProperty.call(record, RANGE) && (!Array.isArray(record[RANGE]) || typeof record[BLOB] !== 'string')) throw messageError('blobInvalid');
   if (typeof record[BLOB] === 'string' && Array.isArray(record[RANGE])) {
     // 打包块里的图片：切出这一段再拼回 data URL
     const bytes = resolve(record[BLOB] as string);
-    if (!bytes) return null;
+    if (!bytes) throw messageError('bundleMissingEntry', record[BLOB] as string);
     const range = record[RANGE] as [number, number];
+    if (range.length !== 2 || !range.every(value => Number.isSafeInteger(value) && value >= 0)
+      || range[0] > bytes.length || range[1] > bytes.length - range[0]) throw messageError('blobInvalid');
     const slice = bytes.subarray(range[0], range[0] + range[1]);
     const mime = typeof record[MIME] === 'string' ? record[MIME] : 'application/octet-stream';
     return `data:${mime};base64,${bytesToBase64(slice)}`;
   }
   if (typeof record[BLOB] === 'string') {
     const bytes = resolve(record[BLOB] as string);
-    if (!bytes) return null;
+    if (!bytes) throw messageError('bundleMissingEntry', record[BLOB] as string);
     // 旧包（已停用的预处理档）里的 base64：拼回「前缀 + base64」才是原来的字符串
     if (typeof record[B64] === 'string') return (record[B64] as string) + bytesToBase64(bytes);
     if (typeof record[IMAGE] === 'object' && record[IMAGE] !== null) {
@@ -377,7 +382,7 @@ export function decodeValue(value: unknown, resolve: BlobResolver): unknown {
     return bytes.slice();
   }
 
-  const out: Record<string, unknown> = {};
+  const out: Record<string, unknown> = Object.create(null);
   for (const [key, item] of Object.entries(record)) out[key] = decodeValue(item, resolve);
   return out;
 }

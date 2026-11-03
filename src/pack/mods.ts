@@ -70,6 +70,7 @@ export async function planMods(
 
   for (const [index, name] of names.entries()) {
     const found = await readMod(reader, name, injected);
+    if (!found) throw messageError('packSelectionMissing', name);
     if (found) {
       const sha256 = await sha256Hex(found.bytes);
       const boot = await readBoot(found.bytes);

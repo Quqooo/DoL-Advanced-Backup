@@ -6,8 +6,8 @@ import {
   SAVE_STORE,
 } from '../core/constants';
 import { messageError } from '../core/error';
-import { close, deleteByKeys, ensureDb, getAll, openDb, putAll } from './idb';
-import { readKey, writeKey } from './local';
+import { abortQuietly, close, ensureDb, getAll, openDb } from './idb';
+import { readKey } from './local';
 
 export interface SaveRecord {
   slot: number;
@@ -80,24 +80,78 @@ export function detailTime(record: { data?: unknown } | undefined): number {
  * 槽位与 details 成对写。
  * `details.idx` 是存档时的段落计数（`State.qc`），读档会写回 `state.idx`，必须原样搬，不能按日期重算。
  */
-export async function writeSaves(saves: readonly SaveRecord[], details: readonly DetailRecord[]): Promise<void> {
+export async function writeSaves(saves: readonly SaveRecord[], details: readonly DetailRecord[], missing = false): Promise<Set<number>> {
   const db = await ensureDb(gameDb, 1, [
     { name: SAVE_STORE, keyPath: 'slot' },
     { name: DETAIL_STORE, keyPath: 'slot' },
   ]);
   if (!db) throw messageError('openSaveDbFailed');
   try {
-    if (saves.length > 0) await putAll(db, SAVE_STORE, saves);
-    if (details.length > 0) await putAll(db, DETAIL_STORE, details);
+    const written = new Set<number>();
+    await saveTransaction(db, (saveStore, detailStore, tx, reject) => {
+      const put = (record: SaveRecord): void => {
+        try {
+          saveStore.put(record);
+          const detail = details.find(item => item.slot === record.slot);
+          if (detail) detailStore.put(detail);
+          written.add(record.slot);
+        } catch (error) {
+          abortQuietly(tx);
+          reject(error);
+        }
+      };
+      for (const record of saves) {
+        if (!missing) put(record);
+        else {
+          const exists = saveStore.count(record.slot);
+          exists.onsuccess = () => { if (exists.result === 0) put(record); };
+        }
+      }
+      for (const detail of details) {
+        if (!missing && !saves.some(record => record.slot === detail.slot)) detailStore.put(detail);
+      }
+    });
+    return written;
   } finally {
     close(db);
   }
 }
 
-/** legacy 两键一起写，缺一个游戏就分不清是哪个引擎 */
+function saveTransaction(
+  db: IDBDatabase,
+  fill: (saves: IDBObjectStore, details: IDBObjectStore, tx: IDBTransaction, reject: (error: unknown) => void) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([SAVE_STORE, DETAIL_STORE], 'readwrite');
+    tx.oncomplete = () => resolve();
+    tx.onerror = tx.onabort = () => reject(messageError('saveTransactionFailed'));
+    try {
+      fill(tx.objectStore(SAVE_STORE), tx.objectStore(DETAIL_STORE), tx, reject);
+    } catch (error) {
+      abortQuietly(tx);
+      reject(error);
+    }
+  });
+}
+
+/** 两键写失败尽力补偿；localStorage 不提供崩溃原子性。 */
 export function writeLegacy(legacy: { saves: string | null; details: string | null }): void {
-  if (legacy.saves !== null) writeKey(LEGACY_SAVES_KEY, legacy.saves);
-  if (legacy.details !== null) writeKey(LEGACY_DETAILS_KEY, legacy.details);
+  const area = window.localStorage;
+  const previous = [area.getItem(LEGACY_SAVES_KEY), area.getItem(LEGACY_DETAILS_KEY)];
+  try {
+    if (legacy.saves !== null) area.setItem(LEGACY_SAVES_KEY, legacy.saves);
+    if (legacy.details !== null) area.setItem(LEGACY_DETAILS_KEY, legacy.details);
+  } catch {
+    let restored = true;
+    [LEGACY_SAVES_KEY, LEGACY_DETAILS_KEY].forEach((key, index) => {
+      try {
+        const value = previous[index];
+        if (value === null) area.removeItem(key);
+        else area.setItem(key, value);
+      } catch { restored = false; }
+    });
+    throw messageError(restored ? 'legacyWriteFailed' : 'legacyRollbackFailed');
+  }
 }
 
 /** 两仓按槽位成对删除：只剩一边会让存档列表多出一个打不开的槽 */
@@ -106,8 +160,12 @@ export async function deleteSaves(slots: readonly number[]): Promise<void> {
   const db = await openDb(gameDb);
   if (!db) return;
   try {
-    await deleteByKeys(db, SAVE_STORE, slots);
-    await deleteByKeys(db, DETAIL_STORE, slots);
+    await saveTransaction(db, (saves, details) => {
+      for (const slot of slots) {
+        saves.delete(slot);
+        details.delete(slot);
+      }
+    });
   } finally {
     close(db);
   }

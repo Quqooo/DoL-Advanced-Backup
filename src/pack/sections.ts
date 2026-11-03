@@ -9,6 +9,7 @@ import {
   ssAddr,
 } from '../core/address';
 import { textByteLength } from '../core/format';
+import { messageError } from '../core/error';
 import { createJsonWriter, type JsonSink } from '../core/jsonwrite';
 import type { IndexDb, IndexKey, IndexSave, ManifestIndex } from '../core/manifest';
 import { dateOf, saveIdOf } from '../core/savemeta';
@@ -22,8 +23,8 @@ import type { BlobTable } from './blob';
 import { encodeValue, collectBlobRefs } from './encode';
 
 /**
- * 一个分区：`write` 负责把它序列化进 sink。小分区一次写完；整库分区边翻页边写，
- * 记录读完一条就编码、写走、丢掉，上万条记录的对象图不会同时存在。
+ * 一个分区：`write` 负责序列化进 sink。小分区一次写完；整库从一致性缓存分页编码。
+ * 原始记录整库驻留，编码结果流式写出。
  */
 export interface SectionTask {
   file: string;
@@ -114,8 +115,8 @@ const PAGE = 1000;
 /**
  * 整库分区：边翻页边写。
  *
- * 一条记录读完立刻编码、写进 JSON、然后丢掉——12,552 条记录的对象图（约 445 MB）
- * 因此不会同时存在。写入的字节直接进入压缩流，整段 JSON 也不会合并成一条字符串。
+ * 单事务缓存整库原始记录后分页编码，接受原始对象图常驻的内存代价。
+ * 写入字节直接进入压缩流，整段 JSON 不合并成一条字符串。
  * 元信息（keyPath / autoIncrement / 索引）与记录一起写，恢复时才能原样建仓。
  */
 function databaseTask(
@@ -145,6 +146,7 @@ function databaseTask(
       for (const name of names) {
         const before = written;
         const reader = await openDbReader(name);
+        if (!reader) throw messageError('packSelectionMissing', name);
         if (reader) {
           dbs += 1;
           try {
@@ -238,6 +240,8 @@ export async function buildSections({ selected, blobs, onSection, onProgress }: 
     : { enabled: [] as string[], hidden: [] as string[], orderPresent: false, hiddenPresent: false };
   const wantOrder = selected.has(MOD_ORDER_ADDR) && lists.orderPresent;
   const wantHidden = selected.has(MOD_HIDDEN_ADDR) && lists.hiddenPresent;
+  if (selected.has(MOD_ORDER_ADDR) && !wantOrder) throw messageError('packSelectionMissing', MOD_ORDER_ADDR);
+  if (selected.has(MOD_HIDDEN_ADDR) && !wantHidden) throw messageError('packSelectionMissing', MOD_HIDDEN_ADDR);
 
   // 未选中的分区不占份额，否则只导出几个键时，进度会停在到不了的 60%
   const weights = new Map<keyof typeof SECTION_WEIGHT, number>();
@@ -273,6 +277,9 @@ export async function buildSections({ selected, blobs, onSection, onProgress }: 
     const addr = cookieAddr(cookie.name);
     if (selected.has(addr)) keys.push({ a: addr, v: cookie.value });
   }
+  for (const addr of selected) {
+    if (/^(ls|ss|ck):/.test(addr) && !keys.some(item => item.a === addr)) throw messageError('packSelectionMissing', addr);
+  }
   if (keys.length > 0) {
     announce('keys.json');
     await onSection(plainSection('keys.json', { items: keys }, keys.length, refs));
@@ -284,6 +291,9 @@ export async function buildSections({ selected, blobs, onSection, onProgress }: 
   if (slots.size > 0 || wantLegacy) {
     const [saves, details] = await Promise.all([readSaves(), readDetails()]);
     const picked = saves.filter(record => slots.has(record.slot));
+    for (const slot of slots) {
+      if (!picked.some(record => record.slot === slot)) throw messageError('packSelectionMissing', String(slot));
+    }
     const encoded = await Promise.all(
       picked.map(async record => ({
         slot: record.slot,
@@ -295,6 +305,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress }: 
       .filter(record => slots.has(record.slot))
       .map(record => ({ slot: record.slot, data: record.data }));
     const legacy = wantLegacy ? readLegacy() : { saves: null, details: null };
+    if (wantLegacy && legacy.saves === null) throw messageError('packSelectionMissing', LEGACY_SAVE_ADDR);
     const entries = encoded.length + detailRows.length + (legacy.saves !== null ? 1 : 0);
     if (entries > 0) {
       announce('saves.json');
@@ -330,7 +341,10 @@ export async function buildSections({ selected, blobs, onSection, onProgress }: 
   /* ---------- 整库：结构、索引与全部记录 ---------- */
   if (wantedDbs.length > 0) {
     const present = new Set((await databases()).map(item => item.name));
-    const names = wantedDbs.filter(name => present.has(name));
+    for (const name of wantedDbs) {
+      if (!present.has(name)) throw messageError('packSelectionMissing', name);
+    }
+    const names = wantedDbs;
     if (names.length > 0) {
       announce('idb.json');
       // 每读完一个库推进一份；整库的进度就在这一段里，不再有更细的刻度

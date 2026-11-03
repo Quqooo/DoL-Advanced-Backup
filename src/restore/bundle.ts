@@ -214,8 +214,11 @@ export async function loadBlobs(bundle: Bundle, only?: ReadonlySet<string>): Pro
   const blobs = new Map<string, Uint8Array>();
   for (const blob of bundle.manifest.blobs) {
     if (only && !only.has(blob.file)) continue;
-    if (!bundle.has(blob.file)) continue;
+    if (!bundle.has(blob.file)) fail('entry', 'bundleMissingEntry', blob.file);
     blobs.set(blob.file, await bundle.read(blob.file));
+  }
+  for (const file of only ?? []) {
+    if (!blobs.has(file)) fail('entry', 'bundleMissingEntry', file);
   }
   return blobs;
 }

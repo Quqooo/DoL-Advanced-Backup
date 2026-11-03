@@ -1,4 +1,4 @@
-import { abortQuietly, close, ensureDb, openDb, putRecords, request, type DbKey, type IndexSpec, type StoreSpec } from './index';
+import { abortQuietly, close, ensureDb, openDb, request, type DbKey, type IndexSpec, type StoreSpec } from './index';
 import { messageError } from '../../core/error';
 
 export interface DbStoreMeasure {
@@ -54,61 +54,77 @@ export interface DbStoreMeta {
   indexes: IndexSpec[];
 }
 
-/** 分页读句柄：整库分区边读边写，不再把上万条记录一次性建成对象图 */
+/** 一致性读句柄：单事务缓存整库原始记录，再分页异步编码。 */
 export interface DbReader {
   readonly version: number;
   readonly stores: readonly DbStoreMeta[];
   /**
    * 按 key 升序翻页。`after` 传上一页最后一个键，返回空数组表示读完。
-   * 每页一个事务：页大小决定瞬时驻留的记录量，也决定多开几次事务。
+   * 分页只读取缓存，不重新开启事务。
    */
   page(store: string, after: DbKey | undefined, count: number): Promise<DbRecordDump[]>;
   close(): void;
 }
 
-/**
- * 打开一个库准备分页读取。库不存在时返回 null，不创建新库。
- *
- * 元信息必须在一个事务里同步读完：一 await 事务就结束，再碰 `store.index()` 会抛
- * InvalidStateError；记录则每次翻页单开一个事务。
- */
+/** 单只读事务覆盖全部仓库；事务内只排 IDB 请求，不等待外部编码。 */
 export async function openDbReader(name: string): Promise<DbReader | null> {
   const db = await openDb(name);
   if (!db) return null;
   const stores: DbStoreMeta[] = [];
-  for (const storeName of [...db.objectStoreNames]) {
-    const tx = db.transaction(storeName, 'readonly');
-    const store = tx.objectStore(storeName);
-    stores.push({
-      name: storeName,
-      keyPath: store.keyPath as string | string[] | null,
-      autoIncrement: store.autoIncrement,
-      indexes: [...store.indexNames].map(indexName => {
-        const index = store.index(indexName);
-        return {
-          name: index.name,
-          keyPath: index.keyPath as string | string[],
-          unique: index.unique,
-          multiEntry: index.multiEntry,
-        };
-      }),
+  const cache = new Map<string, DbRecordDump[]>();
+  const version = db.version;
+  try {
+    const names = [...db.objectStoreNames];
+    if (names.length > 0) await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(names, 'readonly');
+      tx.oncomplete = () => resolve();
+      tx.onerror = tx.onabort = () => reject(messageError('dbReadFailed', name));
+      try {
+        for (const storeName of names) {
+          const store = tx.objectStore(storeName);
+          stores.push({
+            name: storeName,
+            keyPath: store.keyPath as string | string[] | null,
+            autoIncrement: store.autoIncrement,
+            indexes: [...store.indexNames].map(indexName => {
+              const index = store.index(indexName);
+              return { name: index.name, keyPath: index.keyPath as string | string[], unique: index.unique, multiEntry: index.multiEntry };
+            }),
+          });
+          const records: DbRecordDump[] = [];
+          cache.set(storeName, records);
+          const read = store.openCursor();
+          read.onsuccess = () => {
+            const cursor = read.result;
+            if (!cursor) return;
+            records.push({ key: cursor.key as DbKey, value: cursor.value });
+            cursor.continue();
+          };
+        }
+      } catch (error) {
+        abortQuietly(tx);
+        reject(error);
+      }
     });
+  } finally {
+    close(db);
   }
   return {
-    version: db.version,
+    version,
     stores,
     async page(storeName, after, count) {
-      const tx = db.transaction(storeName, 'readonly');
-      const store = tx.objectStore(storeName);
-      // 上一页的最后一个键（exclusive）往后取：键在库里唯一，翻页不会重也不会漏
-      const range = after === undefined ? undefined : IDBKeyRange.lowerBound(after as IDBValidKey, true);
-      const [keys, values] = await Promise.all([
-        request(store.getAllKeys(range, count)),
-        request(store.getAll(range, count) as IDBRequest<unknown[]>),
-      ]);
-      return keys.map((key, index) => ({ key: key as DbKey, value: values[index] }));
+      const records = cache.get(storeName) ?? [];
+      let start = 0;
+      let end = records.length;
+      // 上界查找：保留 IDB 键排序语义，排除 after 本身。
+      if (after !== undefined) while (start < end) {
+        const middle = start + Math.floor((end - start) / 2);
+        if (indexedDB.cmp(records[middle].key as IDBValidKey, after as IDBValidKey) <= 0) start = middle + 1;
+        else end = middle;
+      }
+      return records.slice(start, start + count);
     },
-    close: () => close(db),
+    close: () => cache.clear(),
   };
 }
 
@@ -132,13 +148,17 @@ export interface DbWriteOutcome {
  * 已排入的 `clear` 仍会提交。包来自 out-of-line 键的仓库、目标仓库却带 `keyPath` 时，
  * `put(value)` 就会同步抛 `DataError`——不中止的话，报告失败而旧记录已经没了。
  */
-function rewriteStores(db: IDBDatabase, stores: readonly DbStoreDump[]): Promise<{ records: number; missingStores: string[] }> {
+function rewriteStores(db: IDBDatabase, stores: readonly DbStoreDump[], clear = true): Promise<{ records: number; missingStores: string[] }> {
   return new Promise((resolve, reject) => {
     const missingStores: string[] = [];
     const present: DbStoreDump[] = [];
     for (const store of stores) {
       if (db.objectStoreNames.contains(store.name)) present.push(store);
       else missingStores.push(store.name);
+    }
+    if (missingStores.length > 0) {
+      reject(messageError('dbSchemaMismatch', db.name));
+      return;
     }
     const names = [...db.objectStoreNames];
     if (names.length === 0) {
@@ -157,7 +177,22 @@ function rewriteStores(db: IDBDatabase, stores: readonly DbStoreDump[]): Promise
     tx.onerror = () => reject(tx.error ?? new Error('write failed'));
     tx.onabort = () => reject(tx.error ?? new Error('write aborted'));
     try {
-      for (const name of names) tx.objectStore(name).clear();
+      const unique = new Set<string>();
+      for (const source of stores) {
+        const target = tx.objectStore(source.name);
+        if (unique.has(source.name) || JSON.stringify(target.keyPath) !== JSON.stringify(source.keyPath)
+          || target.autoIncrement !== source.autoIncrement
+          || target.indexNames.length !== source.indexes.length
+          || new Set(source.indexes.map(index => index.name)).size !== source.indexes.length) throw messageError('dbSchemaMismatch', db.name);
+        unique.add(source.name);
+        for (const spec of source.indexes) {
+          if (!target.indexNames.contains(spec.name)) throw messageError('dbSchemaMismatch', db.name);
+          const index = target.index(spec.name);
+          if (JSON.stringify(index.keyPath) !== JSON.stringify(spec.keyPath)
+            || index.unique !== spec.unique || index.multiEntry !== spec.multiEntry) throw messageError('dbSchemaMismatch', db.name);
+        }
+      }
+      if (clear) for (const name of names) tx.objectStore(name).clear();
       for (const store of present) {
         const objectStore = tx.objectStore(store.name);
         const inline = objectStore.keyPath !== null;
@@ -205,22 +240,12 @@ export async function writeDatabase(dump: DbDump, options: { recreate?: boolean 
   const db = await ensureDb(dump.name, dump.version, specs);
   if (!db) throw messageError('openDbFailed', dump.name);
 
-  const missingStores: string[] = [];
-  let records = 0;
   try {
-    for (const store of dump.stores) {
-      if (!db.objectStoreNames.contains(store.name)) {
-        missingStores.push(store.name);
-        continue;
-      }
-      if (store.records.length === 0) continue;
-      await putRecords(db, store.name, store.records);
-      records += store.records.length;
-    }
+    const outcome = await rewriteStores(db, dump.stores, options.recreate === true);
+    return { ...outcome, cleared: options.recreate === true };
   } finally {
     close(db);
   }
-  return { records, missingStores, cleared: false };
 }
 
 /**

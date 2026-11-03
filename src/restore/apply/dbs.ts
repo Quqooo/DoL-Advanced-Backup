@@ -17,7 +17,7 @@ import { close, getAllWithKeys, openDb, type DbKey } from '../../store/idb';
 import type { DbDump } from '../../store/idb/dump';
 import { mergeOrderList } from '../merge';
 import { skipsDb } from '../plan';
-import type { DbSection, IdbSection, RestorePlan } from '../types';
+import type { DbSection, RestorePlan } from '../types';
 import { bump, fail, picked, type ApplyState } from './state';
 
 /** 图像包（BeautySelectorAddon）的三个库：排序与图片清单都在启动时读一次 */
@@ -105,28 +105,25 @@ async function openIdbSource(bundle: RestorePlan['bundle']): Promise<IdbSource |
   return { bytes, ranges: splitElements(bytes, { start: dbsStart, end: bytes.length }) };
 }
 
+/** 预检与写入共用切片入口，结构错配直接拒绝，不回退全分区对象图。 */
+export async function openDbSections(plan: RestorePlan): Promise<(name: string) => DbSection> {
+  const skeleton = plan.sections.idb?.dbs ?? [];
+  const order = new Map(skeleton.map((db, index) => [db.name, index]));
+  const source = await openIdbSource(plan.bundle);
+  if (!source || source.ranges.length !== skeleton.length) throw messageError('bundleAddressMismatch');
+  return name => {
+    const index = order.get(name);
+    if (index === undefined || !source.ranges[index]) throw messageError('bundleAddressMismatch');
+    const parsed = parseJson(textOf(source.bytes, source.ranges[index])) as DbSection;
+    if (parsed?.name !== name) throw messageError('bundleAddressMismatch');
+    return parsed;
+  };
+}
+
 export async function applyDbs(state: ApplyState): Promise<void> {
   const items = picked(state, 'idb');
   if (items.length === 0) return;
-  const skeleton = state.plan.sections.idb?.dbs ?? [];
-  const order = new Map(skeleton.map((db, index) => [db.name, index]));
-  // 逐库切片：整段解析会把上万条记录同时建成对象，而写完一个库它就再也没用了
-  const source = await openIdbSource(state.plan.bundle);
-  /** 结构对不上时的退路：整段解析一次，之后按名字取 */
-  let whole: Map<string, DbSection> | null = null;
-
-  const sectionOf = async (name: string): Promise<DbSection | null> => {
-    const index = order.get(name);
-    if (source && index !== undefined && source.ranges[index]) {
-      const parsed = parseJson(textOf(source.bytes, source.ranges[index])) as DbSection;
-      // 骨架与数组同序，名字不一致说明包已被修改：此时退回整段解析，避免写入错误的库
-      if (parsed?.name === name) return parsed;
-    }
-    whole ??= new Map(
-      ((await state.plan.bundle.readJson<IdbSection>('idb.json')).dbs ?? []).map(db => [db.name, db]),
-    );
-    return whole.get(name) ?? null;
-  };
+  const sectionOf = await openDbSections(state.plan);
 
   let seen = 0;
   for (const item of items) {
@@ -143,11 +140,7 @@ export async function applyDbs(state: ApplyState): Promise<void> {
       bump(state.report, item, 'skipped');
       continue;
     }
-    const section = await sectionOf(name);
-    if (!section) {
-      bump(state.report, item, 'skipped');
-      continue;
-    }
+    const section = sectionOf(name);
     if (orderMerge) await mergeOrderRecord(section);
     try {
       const outcome = await writeAddr(

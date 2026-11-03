@@ -213,7 +213,7 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     syncMode();
   }
 
-  // 摘要说明「这个包会做什么」，随模式变化：只有干净恢复会删除数据，其余模式不显示删除数
+  // 覆盖与干净模式按实际镜像范围显示删除预告。
   function summaryText(): string {
     if (!plan) return '';
     const parts = [t().packageSummary(plan.bundle.manifest.game, plan.items.length)];
@@ -373,14 +373,13 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     const selected = [...tree.selection()];
     const keepSelf = keepSelfBox.checked;
     void (async () => {
-      const otherDeletions = currentMode === 'clean'
-        ? (deletionsOf(current, selected, keepSelf).other ?? 0)
-        : 0;
+      const otherDeletions = Object.values(deletionsOf(current, selected, keepSelf))
+        .reduce<number>((sum, count) => sum + (count ?? 0), 0);
       if (otherDeletions > 0) {
         // 未识别数据可能装着同域其他应用的东西，删它要单独确认
         const ok = await confirmDialog({
-          title: t().cleanTitle,
-          body: `<p>${t().confirmOther(otherDeletions)}</p>`,
+          title: MODE_TEXT[currentMode](),
+          body: `<p>${t().deletableCount(otherDeletions)}</p>`,
           okLabel: t().startRestore,
           cancelLabel: t().cancelAction,
         });

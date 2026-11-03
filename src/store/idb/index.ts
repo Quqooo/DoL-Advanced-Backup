@@ -1,3 +1,5 @@
+import { messageError } from '../../core/error';
+
 export interface DatabaseInfo {
   name: string;
   version: number;
@@ -11,14 +13,14 @@ export function request<T>(req: IDBRequest<T>): Promise<T> {
 }
 
 export async function databases(): Promise<DatabaseInfo[]> {
-  if (typeof indexedDB.databases !== 'function') return [];
   try {
+    if (typeof indexedDB.databases !== 'function') throw messageError('dbEnumerationFailed');
     const list = await indexedDB.databases();
     return list
       .filter(item => typeof item.name === 'string')
       .map(item => ({ name: String(item.name), version: Number(item.version ?? 0) }));
   } catch {
-    return [];
+    throw messageError('dbEnumerationFailed');
   }
 }
 
@@ -41,34 +43,26 @@ export async function databaseExists(name: string): Promise<boolean | null> {
  * 否则「没有游戏的库」和「库是空的」无法区分。
  */
 export async function openDb(name: string): Promise<IDBDatabase | null> {
-  const supported = typeof indexedDB.databases === 'function';
-  if (supported) {
-    const list = await databases();
-    if (!list.some(item => item.name === name)) return null;
-  }
+  const list = await databases();
+  if (!list.some(item => item.name === name)) return null;
   return new Promise((resolve, reject) => {
-    let created = false;
+    let absent = false;
+    let blocked = false;
     const open = indexedDB.open(name);
     open.onupgradeneeded = () => {
-      created = true;
+      // 枚举后库可能消失：中止建库，不提交空库再删除。
+      absent = true;
+      open.transaction?.abort();
     };
     open.onsuccess = () => {
-      const db = open.result;
-      if (created) {
-        // 走到这里说明库原本不存在，关掉并当作没有
-        db.close();
-        // 删除这个刚创建的空库：保留它时，下一次 openDb 会认为「库已存在」，
-        // ensureDb 不会补建仓库，之后所有事务都会抛 NotFoundError。
-        const drop = indexedDB.deleteDatabase(name);
-        drop.onsuccess = () => resolve(null);
-        drop.onerror = () => resolve(null);
-        drop.onblocked = () => resolve(null);
-        return;
-      }
-      resolve(db);
+      if (blocked) open.result.close();
+      else resolve(open.result);
     };
-    open.onerror = () => reject(open.error ?? new Error(`open ${name} failed`));
-    open.onblocked = () => reject(new Error(`open ${name} blocked`));
+    open.onerror = () => absent ? resolve(null) : reject(messageError('openDbFailed', name));
+    open.onblocked = () => {
+      blocked = true;
+      reject(messageError('openDbFailed', name));
+    };
   });
 }
 
@@ -99,7 +93,12 @@ function createIndexes(store: IDBObjectStore, indexes: readonly IndexSpec[] | un
 export function openWithStores(name: string, version: number, specs: readonly StoreSpec[]): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const open = indexedDB.open(name, version);
-    open.onupgradeneeded = () => {
+    open.onupgradeneeded = event => {
+      // 枚举与建库之间可能有其他页面建库，不能升级它。
+      if (event.oldVersion !== 0) {
+        open.transaction?.abort();
+        return;
+      }
       const db = open.result;
       for (const spec of specs) {
         if (db.objectStoreNames.contains(spec.name)) continue;
@@ -247,7 +246,7 @@ export function deleteByKeys(db: IDBDatabase, store: string, keys: readonly IDBV
 
 /**
  * 删库要等所有连接关闭，`onblocked` 会一直挂着。
- * 恢复流程不能卡在这里，阻塞就按失败处理，由调用方记账。
+ * 启动清理不能卡在这里：阻塞按失败返回，请求仍留在浏览器里，由调用方决定是否重试。
  */
 export function deleteDatabase(name: string): Promise<boolean> {
   return new Promise(resolve => {

@@ -2,8 +2,10 @@ import type { RestoreMode } from '../core/types';
 import { messageError } from '../core/error';
 import type { Progress } from '../core/progress';
 import { isRestorePack, selfMod, type SelfMod } from '../host/self';
-import { isModPack, listModPackEntries } from '../core/modpack';
-import { listZipEntries } from '../core/zipread';
+import { isModPack } from '../core/modpack';
+import { bytesSource, openZip } from '../core/zipread';
+import { decodeEntry } from '../pack/codec';
+import { sha256Hex } from '../pack/blob';
 import { openBundle, type Bundle } from '../restore/bundle';
 import { bundleOfZip, isZipBundleUnreadable } from '../restore/zipbundle';
 import { importBundle, type ImportResult } from './import';
@@ -29,8 +31,8 @@ export interface RestorePack {
  * JSZip 只认 STORE / DEFLATE，读不了 ZSTD（method 93）。这种包改从存储层取原始字节，
  * 用自己的读取器解——包装进 ModLoader 之后，原始字节就在它的存储值里。
  *
- * 条目名对得上才算同一个包：同一台机器上可能装着不止一个恢复包。
- * 容器形态按容器条目表比对（直接 listZipEntries 会把内层 zip 的中央目录误当外层的）。
+ * 回退必须验证每个条目的内容哈希且只匹配唯一来源；读不出身份就拒绝。
+ * 不以文件名、大小或 CRC 相同作为强身份依据。
  */
 async function bundleFromStorage(mod: SelfMod): Promise<Bundle | null> {
   const mine = Object.keys(mod.zip.files).filter(name => !mod.zip.files[name].dir);
@@ -40,20 +42,32 @@ async function bundleFromStorage(mod: SelfMod): Promise<Bundle | null> {
   } catch {
     return null;
   }
+  // 必须逐条读取当前句柄并核对内容哈希；读不出就无法证明来源，不以文件名猜测。
+  const hashes = new Map<string, string>();
+  try {
+    for (const name of mine) hashes.set(name, await sha256Hex(await mod.zip.files[name].async('uint8array')));
+  } catch {
+    return null;
+  }
+  const matches: Bundle[] = [];
   for (const pack of packs) {
-    const names = new Set(
-      isModPack(pack.bytes)
-        ? listModPackEntries(pack.bytes)
-        : listZipEntries(pack.bytes).map(entry => entry.name),
-    );
-    if (names.size !== mine.length || !mine.every(name => names.has(name))) continue;
+    // 容器正常走内层字节入口；这里没有可验证的外层读路径就拒绝回退。
+    if (isModPack(pack.bytes)) continue;
     try {
-      return await openBundle(pack.bytes);
+      const zip = await openZip(bytesSource(pack.bytes));
+      const entries = zip.entries.filter(entry => !entry.name.endsWith('/'));
+      if (entries.length !== mine.length || new Set(entries.map(entry => entry.name)).size !== mine.length) continue;
+      let equal = true;
+      for (const entry of entries) {
+        const data = await zip.read(entry.name, decodeEntry);
+        if (!data || !hashes.has(entry.name) || await sha256Hex(data) !== hashes.get(entry.name)) { equal = false; break; }
+      }
+      if (equal) matches.push(await openBundle(pack.bytes));
     } catch {
       continue;
     }
   }
-  return null;
+  return matches.length === 1 ? matches[0] : null;
 }
 
 /**
