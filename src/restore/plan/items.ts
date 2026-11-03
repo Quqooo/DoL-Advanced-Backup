@@ -5,6 +5,7 @@ import { kindOfAddr, type Item, type ItemFlags } from '../../core/item';
 import type { ManifestIndex, ManifestModItem } from '../../core/manifest';
 import { matches, selfEntry } from '../../core/mapping';
 import { createDecoder } from '../../pack/decode';
+import { fieldOfEncoded, isEncodedArray } from '../../pack/graph';
 import { dateOf, saveIdOf } from '../../core/savemeta';
 import type { Bundle } from '../bundle';
 import type {
@@ -62,15 +63,13 @@ export function itemsOfSaves(section: SavesSection, ctx: GroupContext, format: 1
   };
   for (const record of section.saves) {
     const addr = saveAddr(record.slot);
-    const data = record.data as Record<string, unknown> | null;
     const detail = detailBySlot.has(record.slot) ? decodeDetail(detailBySlot.get(record.slot)?.data) : null;
     const title = detail?.title;
     const mtime = dateOf(detail?.date);
     const saveId = saveIdOf(detail);
-    // 带 id 的数组会包成 `$ab:arr`，只看 Array.isArray 会漏判
-    const deltaRaw = (data as { delta?: unknown } | null)?.delta;
-    const delta = Array.isArray(deltaRaw)
-      || (typeof deltaRaw === 'object' && deltaRaw !== null && '$ab:arr' in deltaRaw);
+    // 带 id 的数组会包成 `$ab:arr`，自带 `$ab:` 键的存档会包进 `$ab:obj`；
+    // 共享成 `$ab:ref` 的数组在这里认不出来，恢复页以索引里的 `delta` 为准
+    const delta = isEncodedArray(fieldOfEncoded(record.data, 'delta'));
     items.push({
       addr,
       kind: 'save',

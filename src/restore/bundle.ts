@@ -75,7 +75,7 @@ export function verifyIndex(manifest: Manifest): void {
   } else if (manifest.index.saves.length > countOf('saves')) {
     fail('verify', 'bundleSaveIndex', manifest.index.saves.length, countOf('saves'));
   }
-  // 整库的 entries 是「想写的库数」，导出途中消失的库不进索引，所以有 dbs 时按实际写入数对照
+  // 整库的 entries 与 dbs 都是实际写进分区的库数；导出途中消失或被跳过的库不进索引
   const idb = sectionOf('idb');
   if (idb?.dbs !== undefined) {
     if (manifest.index.dbs.length !== idb.dbs) {

@@ -29,7 +29,7 @@ import { assertSupported } from './graph';
  */
 export interface SectionTask {
   file: string;
-  /** 树与清单上的条目数（整库是库数，存档是槽数） */
+  /** 树与清单上的条目数（整库是实际写入的库数；存档是槽数 + 详情 + 旧式存档） */
   entries: number;
   /** 存档分区：实际写入的槽数，清单用它和 `index.saves` 精确对照 */
   slots?: number;
@@ -236,7 +236,9 @@ function databaseTask(
       }
       writer.raw(']}');
       await writer.flush();
+      // 跳过的库没有写进分区：清单里的条目数与索引都只算真正写进去的
       task.dbs = dbs;
+      task.entries = dbs;
     },
   };
   return task;
@@ -291,7 +293,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
 
   // 未选中的分区不占份额，否则只导出几个键时，进度会停在到不了的 60%
   const weights = new Map<keyof typeof SECTION_WEIGHT, number>();
-  if ([...selected].some(addr => /^(ls|ss|ck):/.test(addr))) weights.set('keys', SECTION_WEIGHT.keys);
+  if ([...selected].some(addr => /^(ls|ss):/.test(addr))) weights.set('keys', SECTION_WEIGHT.keys);
   if (slots.size > 0 || wantLegacy) weights.set('saves', SECTION_WEIGHT.saves);
   if (wantedDbs.length > 0) weights.set('idb', SECTION_WEIGHT.idb);
   if (modNames.length > 0 || wantOrder || wantHidden) weights.set('mods', SECTION_WEIGHT.mods);
@@ -336,10 +338,16 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
     for (const slot of slots) {
       if (!picked.some(record => record.slot === slot)) throw messageError('packSelectionMissing', String(slot));
     }
-    const encoded: { slot: number; data: unknown }[] = [];
+    /** `delta` 在原始对象上判：编码后它可能被共享成 `$ab:ref`，从结果里认不出来 */
+    const encoded: { slot: number; data: unknown; delta: boolean }[] = [];
     for (const record of picked) {
       try {
-        encoded.push({ slot: record.slot, data: await encodeValue(record.data, blobs, `saves/${record.slot}`) });
+        const data = record.data as { delta?: unknown } | null;
+        encoded.push({
+          slot: record.slot,
+          data: await encodeValue(record.data, blobs, `saves/${record.slot}`),
+          delta: Boolean(data && typeof data === 'object' && Array.isArray(data.delta)),
+        });
       } catch (error) {
         if (policy !== 'skip' || (error as { id?: string }).id !== 'unsupportedValue') throw error;
         // 单条存档无法无损编码：整槽（含 details）都不进包，记下地址供恢复侧保护
@@ -381,14 +389,12 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
       const title = meta?.title;
       const saveId = saveIdOf(meta);
       const mtime = dateOf(meta?.date);
-      const data = record.data;
-      const delta = Boolean(data && typeof data === 'object' && Array.isArray((data as { delta?: unknown }).delta));
       return {
         slot: record.slot,
         ...(typeof title === 'string' && title.length > 0 ? { title } : {}),
         ...(mtime === undefined ? {} : { date: mtime }),
         ...(saveId === undefined ? {} : { id: saveId }),
-        ...(delta ? { delta: true } : {}),
+        ...(record.delta ? { delta: true } : {}),
         b: encodedBytes(rows[at].data, blobBytes) + (detail === undefined ? 0 : jsonSize(detail)),
       };
     });
