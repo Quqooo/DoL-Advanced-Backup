@@ -9,6 +9,7 @@ import {
   DOM,
   DOMERROR,
   ERROR,
+  FILE,
   GEOMETRY_TAGS,
   HOLE,
   ID,
@@ -17,6 +18,7 @@ import {
   MAX_BYTE_LENGTH,
   MAX_DEPTH,
   MAX_NODES,
+  MIME,
   NUM,
   OBJ,
   PREFIX,
@@ -63,6 +65,13 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
     defs.add(id);
   };
 
+  const expectKeys = (record: Record<string, unknown>, allowed: readonly string[], path: string): void => {
+    for (const key of Object.keys(record)) {
+      if (!key.startsWith(PREFIX)) return shape(path);
+      if (!allowed.includes(key)) throw messageError('valueTagUnknown', key, path);
+    }
+  };
+
   const blobLength = (raw: unknown, path: string): number => {
     if (typeof raw !== 'string') return shape(path);
     const bytes = resolve(raw);
@@ -85,6 +94,7 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
 
     const record = node as Record<string, unknown>;
     if (hasOwn(record, OBJ)) {
+      expectKeys(record, [OBJ, ID], path);
       const inner = record[OBJ];
       if (!isRecord(inner)) return shape(path);
       register(readId(record[ID], path), path);
@@ -93,6 +103,7 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
     }
 
     if (hasOwn(record, REF)) {
+      expectKeys(record, [REF], path);
       const target = record[REF];
       if (typeof target !== 'number' || !Number.isSafeInteger(target) || target < 0) {
         throw messageError('valueRefInvalid', String(target), path);
@@ -107,6 +118,7 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
 
     switch (marker) {
       case MAP: {
+        expectKeys(record, [MAP, ID], path);
         const pairs = record[MAP];
         if (!Array.isArray(pairs)) return shape(path);
         for (const [index, pair] of pairs.entries()) {
@@ -118,6 +130,7 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
       }
       case SET:
       case ARR: {
+        expectKeys(record, [marker, ID], path);
         const items = record[marker];
         if (!Array.isArray(items)) return shape(path);
         for (const [index, item] of items.entries()) {
@@ -127,6 +140,7 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
         return;
       }
       case SPARSE: {
+        expectKeys(record, [SPARSE, ID], path);
         const spec = record[SPARSE];
         if (!isRecord(spec) || !Array.isArray(spec.items)) return shape(path);
         const length = spec.length;
@@ -143,6 +157,7 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
         return;
       }
       case VIEW: {
+        expectKeys(record, [VIEW, ID], path);
         const spec = record[VIEW];
         if (!isRecord(spec) || typeof spec.type !== 'string' || !VIEW_TYPES.has(spec.type)) return shape(path);
         const offset = spec.byteOffset;
@@ -169,6 +184,7 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
         return;
       }
       case BUFFER: {
+        expectKeys(record, [BUFFER, BLOB, RESIZABLE, MAX_BYTE_LENGTH, ID], path);
         const length = blobLength(record[BLOB], path);
         if (id !== undefined) bufferLengths.set(id, length);
         if (record[RESIZABLE] === true) {
@@ -179,6 +195,7 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
       }
       case IMAGE:
       case BLOB: {
+        expectKeys(record, [BLOB, MIME, FILE, RANGE, IMAGE, ID], path);
         const length = blobLength(record[BLOB], path);
         if (hasOwn(record, RANGE)) {
           // 打包块里的 data URL：偏移与长度必须落在块内
@@ -192,12 +209,14 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
         return;
       }
       case ERROR: {
+        expectKeys(record, [ERROR, ID], path);
         const spec = record[ERROR];
         if (!isRecord(spec)) return shape(path);
         if (hasOwn(spec, 'cause')) walk(spec.cause, childPath(path, 'cause'), depth + 1);
         return;
       }
       case DOM: {
+        expectKeys(record, [DOM, ID], path);
         const spec = record[DOM];
         if (!isRecord(spec) || typeof spec.type !== 'string' || !GEOMETRY_TAGS.has(spec.type)) return shape(path);
         if (spec.type === 'DOMQuad') {
@@ -211,6 +230,7 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
         return;
       }
       case BOXED: {
+        expectKeys(record, [BOXED, ID], path);
         const spec = record[BOXED];
         if (!isRecord(spec)) return shape(path);
         walk(spec.value, childPath(path, 'value'), depth + 1);
@@ -218,10 +238,13 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
       }
       case NUM:
       case BIGINT:
-      case DATE:
-      case RE:
       case UNDEF:
       case DOMERROR:
+        expectKeys(record, [marker], path);
+        return;
+      case DATE:
+      case RE:
+        expectKeys(record, [marker, ID], path);
         return;
       default: {
         if (marker !== undefined) throw messageError('valueTagUnknown', marker, path);
