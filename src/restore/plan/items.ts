@@ -4,6 +4,7 @@ import { groupOfKnown, type GroupContext } from '../../core/group';
 import { kindOfAddr, type Item, type ItemFlags } from '../../core/item';
 import type { ManifestIndex, ManifestModItem } from '../../core/manifest';
 import { matches, selfEntry } from '../../core/mapping';
+import { createDecoder } from '../../pack/decode';
 import { dateOf, saveIdOf } from '../../core/savemeta';
 import type { Bundle } from '../bundle';
 import type {
@@ -44,17 +45,32 @@ export function itemsOfKeys(section: KeysSection, ctx: GroupContext): Item[] {
   return items;
 }
 
-export function itemsOfSaves(section: SavesSection, ctx: GroupContext): Item[] {
+export function itemsOfSaves(section: SavesSection, ctx: GroupContext, format: 1 | 2 = 2): Item[] {
   const items: Item[] = [];
   // 恢复页的行要与导出页长得一样：标题、时间、ID 都从包内 details 里取
   const detailBySlot = new Map(section.details.map(record => [record.slot, record]));
+  const decodeDetail = (raw: unknown): Record<string, unknown> | null => {
+    try {
+      const value = createDecoder(format, () => null).decode(raw);
+      return typeof value === 'object' && value !== null && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : null;
+    } catch {
+      // 详情只是一行显示信息：解不开就退回槽号，不影响存档本体恢复
+      return null;
+    }
+  };
   for (const record of section.saves) {
     const addr = saveAddr(record.slot);
     const data = record.data as Record<string, unknown> | null;
-    const detail = detailBySlot.get(record.slot)?.data as Record<string, unknown> | null | undefined;
+    const detail = detailBySlot.has(record.slot) ? decodeDetail(detailBySlot.get(record.slot)?.data) : null;
     const title = detail?.title;
     const mtime = dateOf(detail?.date);
     const saveId = saveIdOf(detail);
+    // 带 id 的数组会包成 `$ab:arr`，只看 Array.isArray 会漏判
+    const deltaRaw = (data as { delta?: unknown } | null)?.delta;
+    const delta = Array.isArray(deltaRaw)
+      || (typeof deltaRaw === 'object' && deltaRaw !== null && '$ab:arr' in deltaRaw);
     items.push({
       addr,
       kind: 'save',
@@ -63,7 +79,7 @@ export function itemsOfSaves(section: SavesSection, ctx: GroupContext): Item[] {
       ...(mtime === undefined ? {} : { mtime }),
       ...(saveId === undefined ? {} : { saveId }),
       order: record.slot,
-      ...(data && Array.isArray(data.delta) ? { flags: { delta: true } } : {}),
+      ...(delta ? { flags: { delta: true } } : {}),
     });
   }
   if (section.legacy?.saves) {
@@ -189,7 +205,7 @@ export function itemsOfIndex(index: ManifestIndex, ctx: GroupContext): Item[] {
 export function itemsOfPackage(bundle: Bundle, sections: PackageSections, ctx: GroupContext): Item[] {
   const items: Item[] = [];
   if (sections.keys) items.push(...itemsOfKeys(sections.keys, ctx));
-  if (sections.saves) items.push(...itemsOfSaves(sections.saves, ctx));
+  if (sections.saves) items.push(...itemsOfSaves(sections.saves, ctx, bundle.manifest.format === 1 ? 1 : 2));
   if (sections.idb) items.push(...itemsOfDbs(sections.idb, ctx));
   items.push(...itemsOfMods(bundle, ctx));
   if (sections.mods) items.push(...itemsOfLists(sections.mods, ctx));

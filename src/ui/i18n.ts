@@ -137,6 +137,11 @@ export interface Strings {
   snapshotRenameHint: string;
   snapshotDeleteTitle: string;
   snapshotDeleteBody: (label: string) => string;
+  /** 快照遇到无法无损编码的值：跳过全部这类条目，或中止本次快照 */
+  snapshotUnsupportedTitle: string;
+  snapshotUnsupportedBody: (type: string, path: string) => string;
+  snapshotUnsupportedSkip: string;
+  snapshotUnsupportedAbort: string;
   snapshotRepaired: string;
   actionRestore: string;
   actionExport: string;
@@ -148,7 +153,6 @@ export interface Strings {
   slot: (key: string) => string;
   legacySaves: string;
   currentOrigin: (host: string) => string;
-  cookieDomain: (domain: string) => string;
   previousPage: string;
   nextPage: string;
   pageOf: (current: number, total: number) => string;
@@ -405,6 +409,11 @@ const ZH: Strings = {
   snapshotRenameHint: '留空则恢复默认名称。',
   snapshotDeleteTitle: '删除快照',
   snapshotDeleteBody: label => `删除「${label}」后无法恢复。`,
+  snapshotUnsupportedTitle: '无法无损备份',
+  snapshotUnsupportedBody: (type, path) =>
+    `${type} 无法无损备份（${path}）。跳过所有无法无损备份的条目，继续生成快照吗？`,
+  snapshotUnsupportedSkip: '跳过并继续',
+  snapshotUnsupportedAbort: '中止本次快照',
   snapshotRepaired: '元数据已修正',
   actionRestore: '恢复',
   actionExport: '导出',
@@ -415,7 +424,6 @@ const ZH: Strings = {
   slot: key => `槽 ${key}`,
   legacySaves: '旧式存档',
   currentOrigin: host => `当前源 · ${host}`,
-  cookieDomain: domain => `Cookie · ${domain}`,
   previousPage: '上一页',
   nextPage: '下一页',
   pageOf: (current, total) => `${current} / ${total} 页`,
@@ -567,6 +575,16 @@ const ZH: Strings = {
     dbReadFailed: name => `数据库 ${name} 的一致性读取失败`,
     dbSchemaMismatch: name => `数据库 ${name} 的仓库结构不兼容，未清空数据`,
     blobInvalid: () => '数据块引用或范围无效',
+    // 值编解码：错误都带路径，出错时能定位到具体记录
+    unsupportedValue: (type, path) => `${type} 无法无损备份：${path}`,
+    valueTagUnknown: (tag, path) => `未知的值标记 ${tag}：${path}`,
+    valueRefInvalid: (id, path) => `引用无效 ${id}：${path}`,
+    valueRefUnknown: (id, path) => `引用了未定义的对象 ${id}：${path}`,
+    valueIdDuplicate: (id, path) => `对象 id 重复 ${id}：${path}`,
+    valueShapeInvalid: path => `值结构不正确：${path}`,
+    valueDepthExceeded: path => `嵌套过深：${path}`,
+    valueNodeLimit: path => `对象过多：${path}`,
+    valueRangeInvalid: path => `视图范围越界：${path}`,
     bundleAddressMismatch: () => '载荷地址与索引不一致或重复',
     packSelectionMissing: name => `选中的条目 ${name} 无法完整打包`,
     saveTransactionFailed: () => '存档与详情事务失败，已回滚',
@@ -753,6 +771,11 @@ const EN: Strings = {
   snapshotRenameHint: 'Leave empty to restore the default name.',
   snapshotDeleteTitle: 'Delete snapshot',
   snapshotDeleteBody: label => `"${label}" cannot be recovered after deletion.`,
+  snapshotUnsupportedTitle: 'Cannot Back Up Losslessly',
+  snapshotUnsupportedBody: (type, path) =>
+    `${type} cannot be backed up losslessly (${path}). Skip all such entries and continue?`,
+  snapshotUnsupportedSkip: 'Skip and Continue',
+  snapshotUnsupportedAbort: 'Abort Snapshot',
   snapshotRepaired: 'Metadata repaired',
   actionRestore: 'Restore',
   actionExport: 'Export',
@@ -763,7 +786,6 @@ const EN: Strings = {
   slot: key => `Slot ${key}`,
   legacySaves: 'Legacy saves',
   currentOrigin: host => `Current origin · ${host}`,
-  cookieDomain: domain => `Cookie · ${domain}`,
   previousPage: 'Previous',
   nextPage: 'Next',
   pageOf: (current, total) => `Page ${current} / ${total}`,
@@ -915,6 +937,16 @@ const EN: Strings = {
     dbReadFailed: name => `Consistent read failed for database ${name}`,
     dbSchemaMismatch: name => `Incompatible stores in database ${name}; no data cleared`,
     blobInvalid: () => 'Invalid data block reference or range',
+    // Value codec: every error carries a path so the failing record can be located
+    unsupportedValue: (type, path) => `${type} cannot be backed up losslessly: ${path}`,
+    valueTagUnknown: (tag, path) => `Unknown value tag ${tag}: ${path}`,
+    valueRefInvalid: (id, path) => `Invalid reference ${id}: ${path}`,
+    valueRefUnknown: (id, path) => `Reference to an undefined object ${id}: ${path}`,
+    valueIdDuplicate: (id, path) => `Duplicate object id ${id}: ${path}`,
+    valueShapeInvalid: path => `Invalid value shape: ${path}`,
+    valueDepthExceeded: path => `Nesting too deep: ${path}`,
+    valueNodeLimit: path => `Too many objects: ${path}`,
+    valueRangeInvalid: path => `View range out of bounds: ${path}`,
     bundleAddressMismatch: () => 'Payload addresses differ from the index or contain duplicates',
     packSelectionMissing: name => `Selected item ${name} could not be fully packed`,
     saveTransactionFailed: () => 'Save and details transaction failed and was rolled back',

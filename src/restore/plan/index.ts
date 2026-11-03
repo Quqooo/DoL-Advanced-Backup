@@ -1,5 +1,6 @@
 import { makeGroupContext } from '../../core/group';
 import { messageError } from '../../core/error';
+import { schemeOf } from '../../core/address';
 import type { Item } from '../../core/item';
 import { isSnapshotAddr } from '../../core/presets';
 import type { RestoreMode } from '../../core/types';
@@ -33,6 +34,16 @@ function collectWarnings(bundle: Bundle, items: readonly Item[]): RestoreWarning
   if (missing.length > 0) warnings.push({ code: 'missing-entry', detail: missing.join(', ') });
 
   if (items.length === 0) warnings.push({ code: 'missing-entry', detail: messageError('restoreEmpty') });
+
+  // 旧包里的 Cookie 条目仍留在索引与分区里（校验要求两处一致），只是不再恢复
+  const cookies = bundle.manifest.index.keys.filter(entry => schemeOf(entry.a) === 'ck').length;
+  if (cookies > 0) warnings.push({ code: 'cookie-unsupported', detail: String(cookies) });
+
+  // 导出时跳过过条目：包内没有那些地址，恢复侧不能把它们当作「本机多余」删掉
+  const skipped = bundle.manifest.options.skipped ?? [];
+  if (bundle.manifest.options.partial === true || skipped.length > 0) {
+    warnings.push({ code: 'partial-package', detail: String(skipped.length) });
+  }
   return warnings;
 }
 
@@ -94,6 +105,8 @@ export async function planRestore(input: {
   input.onProgress?.(1);
 
   const available = new Set(items.map(item => item.addr));
+  // 导出时被跳过的条目不在包里：它们既不能勾选，也不能在本机被镜像删除
+  const guarded = new Set(bundle.manifest.options.skipped ?? []);
 
   // 写入前才完整读分区；读一次缓存住，重试写入不必再解一遍
   let loaded: PackageSections | null = null;
@@ -109,6 +122,7 @@ export async function planRestore(input: {
     items,
     available,
     local,
+    protected: guarded,
     warnings: collectWarnings(bundle, items),
     loadSections,
   };

@@ -87,6 +87,8 @@ export interface CreateSnapshotInput {
   onProgress?: (progress: Progress) => void;
   /** 取消只在阶段边界生效：写库是一整个事务，半路停下会留下半个快照 */
   signal?: AbortSignal;
+  /** 无法无损编码时：缺省中止；`skip` 由用户在确认后选择，跳过条目并记进清单 */
+  onUnsupported?: 'abort' | 'skip';
 }
 
 /** 导出文件名按快照自己的时间，不按当前时间 */
@@ -141,7 +143,12 @@ export async function createSnapshot(input: CreateSnapshotInput): Promise<Snapsh
   const result = await packBlob(
     selected,
     // 快照是内部用的，不写恢复脚本：它不会离开这个浏览器，也不该被当成模组加载
-    { compression: 'none', skipCompressed: true, selfScript: null },
+    {
+      compression: 'none',
+      skipCompressed: true,
+      selfScript: null,
+      ...(input.onUnsupported ? { onUnsupported: input.onUnsupported } : {}),
+    },
     { game: input.game, mod: input.mod },
     {
       ...(input.onProgress

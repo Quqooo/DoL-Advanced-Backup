@@ -1,7 +1,7 @@
 import { slotOfAddr } from '../../core/address';
 import { messageError } from '../../core/error';
 import type { Item } from '../../core/item';
-import { decodeValue } from '../../pack/encode';
+import { createDecoder } from '../../pack/decode';
 import {
   readLegacy,
   writeLegacy,
@@ -40,13 +40,13 @@ export async function applySaves(state: ApplyState): Promise<void> {
       continue;
     }
     const detail = section.details.find(entry => entry.slot === slot);
-    const data = asRecord(decodeValue(record.data, state.resolve));
+    const data = asRecord(createDecoder(state.format, state.resolve).decode(record.data));
     if (!data) {
       fail(state.report, 'saves', item.addr, messageError('saveUndecodable'));
       continue;
     }
     writes.push({ slot, data });
-    const detailData = detail ? asRecord(decodeValue(detail.data, state.resolve)) : null;
+    const detailData = detail ? asRecord(createDecoder(state.format, state.resolve).decode(detail.data)) : null;
     if (detailData) detailWrites.push({ slot, data: detailData });
     applied.push(item);
   }

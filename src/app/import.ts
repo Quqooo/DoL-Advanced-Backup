@@ -15,6 +15,7 @@ import { forecastDeletions, mirrorScopeOf, planRestore } from '../restore/plan';
 import { readPrefs } from '../store/prefs';
 import { useGameDb } from '../store/saves';
 import { autoSnapshot } from '../snapshot/auto';
+import { askSkipUnsupported } from './snapshot-choice';
 import { incompleteGroups } from '../snapshot';
 import { scan } from './scan';
 import { resetScan } from './session';
@@ -122,6 +123,17 @@ export async function importPackage(request: ImportRequest): Promise<ImportResul
   return runImport(bundle, request);
 }
 
+/** 自动快照遇到不支持的类型时先问用户：跳过会留下不完整的回滚点 */
+async function autoSnapshotWithChoice(scanned: Awaited<ReturnType<typeof scan>>): Promise<Awaited<ReturnType<typeof autoSnapshot>>> {
+  const input = { scanned, game: gameVersion(), mod: VERSION };
+  try {
+    return await autoSnapshot(input);
+  } catch (error) {
+    if (!(await askSkipUnsupported(error))) throw error;
+    return autoSnapshot({ ...input, onUnsupported: 'skip' });
+  }
+}
+
 async function runImport(bundle: Bundle, request: Omit<ImportRequest, 'source' | 'bytes'>): Promise<ImportResult> {
   await applyPackMapping(bundle);
   // 恢复包在 inject_early 阶段就跑到这里，`idb.init(Story.domId)` 可能还没执行：
@@ -165,7 +177,7 @@ async function runImport(bundle: Bundle, request: Omit<ImportRequest, 'source' |
       emit('snapshot', BAND.snapshot[0]);
       if (!prefs.autoSnapshot) return;
       try {
-        const snap = await autoSnapshot({ scanned, game: gameVersion(), mod: VERSION });
+        const snap = await autoSnapshotWithChoice(scanned);
         // 扫描为空只是没有可备份的内容；恢复照常，界面提示一次
         if (snap.meta === null) snapshotEmpty = true;
         if (snap.trimError) snapshotTrimFailed = snap.trimError;
@@ -222,7 +234,8 @@ export function deletionsOf(
   selected: Iterable<string>,
   keepSelf: boolean,
 ): Partial<Record<Category, number>> {
-  const picked = new Set(selected);
+  // 与写入侧同一套判据：跳过条目本机有、包里没有，不能被算成待删
+  const picked = new Set([...selected, ...plan.protected]);
   // 范围随模式与勾选变：干净是整机，覆盖只有三个分组，且整组未勾时不删
   return forecastDeletions(plan.local, picked, keepSelf, mirrorScopeOf(plan.mode, plan.items, picked));
 }

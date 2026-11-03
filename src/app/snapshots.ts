@@ -24,6 +24,7 @@ import {
 import { getSnapshotMeta } from '../store/snapshots';
 import { importPackage, type ImportResult } from './import';
 import { scan } from './scan';
+import { askSkipUnsupported } from './snapshot-choice';
 
 const VERSION = __ADVBK_VERSION__;
 
@@ -53,12 +54,13 @@ export async function snapshotCreate(label?: string, hooks: SnapshotCreateHooks 
   // 扫描也占一截进度：装了几百个模组时它要重读三个存储层，不是瞬时的
   hooks.onProgress?.({ phase: 'scan', ratio: 0 });
   const scanned = await scan(true);
-  return createSnapshot({
+  const run = (onUnsupported?: 'skip'): Promise<SnapshotMeta> => createSnapshot({
     kind: 'manual',
     scanned,
     ...(label ? { label } : {}),
     game: gameVersion(),
     mod: VERSION,
+    ...(onUnsupported ? { onUnsupported } : {}),
     ...(hooks.onProgress
       ? {
           onProgress: info =>
@@ -67,6 +69,13 @@ export async function snapshotCreate(label?: string, hooks: SnapshotCreateHooks 
       : {}),
     ...(hooks.signal ? { signal: hooks.signal } : {}),
   });
+  try {
+    return await run();
+  } catch (error) {
+    // 手动快照同样先问：跳过会生成一份不完整的回滚点，得由用户决定
+    if (!(await askSkipUnsupported(error))) throw error;
+    return run('skip');
+  }
 }
 
 /** 快照原始 payload：恢复路径直接交给导入，不展开成字节 */

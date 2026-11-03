@@ -1,16 +1,28 @@
 export const MANIFEST_APP = 'AdvancedBackup';
 
 /**
- * 包格式号。模组尚未发布，1 就是当前唯一的格式，不保留旧格式的兼容分支；
+ * 包格式号。
+ *
+ * 写 2、读 1..2：v1 包里的值编码是有损的旧写法，必须继续能读；v2 包被旧版本拒绝。
  * 旧模组（dol-data-sync）的包 `format` 也是 1，靠 `app` 挡掉。
  */
-export const FORMAT = 1;
+export const FORMAT_WRITE = 2;
+export const FORMAT_MIN_READ = 1;
+/** 当前写入的格式号；读端接受 `FORMAT_MIN_READ..FORMAT_WRITE` */
+export const FORMAT = FORMAT_WRITE;
 
 export interface ManifestOptions {
   compression: 'standard' | 'none' | 'zstd';
   skipCompressed: boolean;
   /** 包里内嵌了恢复脚本（包本身可以当模组加载） */
   selfRestore?: boolean;
+  /**
+   * 导出时跳过了无法无损编码的条目。包因此不完整：`skipped` 里的地址在恢复时
+   * 既不写入，也不得当作「本机多余」删掉。
+   */
+  partial?: boolean;
+  /** 被跳过的地址；只有 `partial` 为真时才有意义 */
+  skipped?: string[];
 }
 
 export interface ManifestSection {
@@ -65,7 +77,7 @@ export interface ManifestBlob {
  * 结构变化由 `format` 统一标识，索引本身不带版本号。
  */
 export interface IndexKey {
-  /** 键地址：`ls:` / `ss:` / `ck:` */
+  /** 键地址：`ls:` / `ss:`；旧包里还可能出现 `ck:` */
   a: string;
   /** 键值编码后的字节数 */
   b: number;
@@ -162,12 +174,19 @@ export function parseManifest(raw: unknown): ParseResult {
   if (raw.app !== MANIFEST_APP) return { ok: false, error: 'app' };
   const format = typeof raw.format === 'number' ? raw.format : Number.NaN;
   if (!Number.isFinite(format)) return { ok: false, error: 'shape' };
-  if (format > FORMAT) return { ok: false, error: 'newer' };
-  if (format !== FORMAT) return { ok: false, error: 'shape' };
+  if (format > FORMAT_WRITE) return { ok: false, error: 'newer' };
+  if (!Number.isInteger(format) || format < FORMAT_MIN_READ) return { ok: false, error: 'shape' };
   if (typeof raw.createdAt !== 'string' || typeof raw.game !== 'string' || typeof raw.mod !== 'string') {
     return { ok: false, error: 'shape' };
   }
   if (!isRecord(raw.options) || !Array.isArray(raw.sections) || !Array.isArray(raw.blobs)) {
+    return { ok: false, error: 'shape' };
+  }
+  if (raw.options.partial !== undefined && typeof raw.options.partial !== 'boolean') {
+    return { ok: false, error: 'shape' };
+  }
+  if (raw.options.skipped !== undefined
+    && (!Array.isArray(raw.options.skipped) || raw.options.skipped.some(addr => typeof addr !== 'string'))) {
     return { ok: false, error: 'shape' };
   }
   if (!isRecord(raw.mods) || !Array.isArray(raw.mods.items)) return { ok: false, error: 'shape' };
@@ -207,7 +226,7 @@ export function createManifest(input: {
 }): Manifest {
   return {
     app: MANIFEST_APP,
-    format: FORMAT,
+    format: FORMAT_WRITE,
     createdAt: input.createdAt ?? new Date().toISOString(),
     game: input.game,
     mod: input.mod,

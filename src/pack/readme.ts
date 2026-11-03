@@ -74,6 +74,14 @@ function chinesePart(manifest: Manifest, selfRestore: boolean): string {
     'keys.json 与 idb.json 里没有分组信息。哪个键属于哪个模组，由游戏内的映射表决定。',
     '同一份数据在不同机器上可能显示在不同的分组里，数据本身不变。',
     '',
+    `包格式：${manifest.format}。值按对象图编码：环、共享引用、稀疏数组、装箱值与视图缓冲关系都会还原。`,
+    ...(manifest.options.partial === true
+      ? [
+          '这个包不完整：导出时有条目无法无损编码，已跳过。清单 options.skipped 列出了它们的地址。',
+          '恢复这个包时，被跳过的地址在本机的数据不会被删除。',
+          '',
+        ]
+      : []),
     'data/ 里是二进制数据块，按内容哈希命名。分区 JSON 用 "$ab:blob" 引用它们。',
     'data/images.bin 是一整条图片流。多条引用靠 "$ab:range" 的偏移与长度共用它。',
     '缺少一个数据块时，就有一处数据无法还原。',
@@ -122,6 +130,14 @@ function englishPart(manifest: Manifest, selfRestore: boolean): string {
     'keys.json and idb.json hold no group information. The in-game mapping table decides which key belongs to which mod.',
     'The same data can appear in a different group on another machine. The data itself does not change.',
     '',
+    `Pack format: ${manifest.format}. Values are encoded as an object graph: cycles, shared references, sparse arrays, boxed values and view buffers all round-trip.`,
+    ...(manifest.options.partial === true
+      ? [
+          'This pack is incomplete: some entries could not be encoded losslessly and were skipped.',
+          'The addresses are listed in manifest options.skipped. Restoring this pack does not delete the local data of those addresses.',
+          '',
+        ]
+      : []),
     'data/ holds binary blocks named by content hash. Section JSON refers to them with "$ab:blob".',
     'data/images.bin is a single image stream. Several references share it through the offset and length in "$ab:range".',
     'If one data block is missing, one piece of data cannot be restored.',

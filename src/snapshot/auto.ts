@@ -10,6 +10,8 @@ export interface AutoSnapshotInput {
   game: string;
   mod: string;
   keep?: number;
+  /** 用户确认跳过无法无损编码的条目时给 `skip` */
+  onUnsupported?: 'abort' | 'skip';
 }
 
 export interface AutoSnapshotResult {
@@ -34,6 +36,7 @@ export async function autoSnapshot(input: AutoSnapshotInput): Promise<AutoSnapsh
     scanned: input.scanned,
     game: input.game,
     mod: input.mod,
+    ...(input.onUnsupported ? { onUnsupported: input.onUnsupported } : {}),
   });
   try {
     await trimAuto(input.keep ?? AUTO_KEEP);

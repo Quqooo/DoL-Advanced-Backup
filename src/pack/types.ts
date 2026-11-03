@@ -12,6 +12,11 @@ export interface PackOptions {
   selfScript?: Uint8Array | null;
   /** 自恢复包再套 ModPack 容器：2.60 起加载器对大模组计算哈希时会抛 RangeError */
   modpackWrap?: boolean;
+  /**
+   * 遇到无法无损编码的记录时：缺省中止整次导出；`skip` 跳过该条并在清单里记下地址。
+   * 只有快照在用户确认后使用 `skip`，手工导出不提供这个选择。
+   */
+  onUnsupported?: 'abort' | 'skip';
 }
 
 export interface PackMeta {

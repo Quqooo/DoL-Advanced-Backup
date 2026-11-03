@@ -2,9 +2,11 @@ import {
   LEGACY_SAVE_ADDR,
   MOD_HIDDEN_ADDR,
   MOD_ORDER_ADDR,
+  idbAddr,
   lsAddr,
   nameOfAddr,
   parseAddr,
+  saveAddr,
   ssAddr,
 } from '../core/address';
 import { textByteLength } from '../core/format';
@@ -13,12 +15,13 @@ import { createJsonWriter, type JsonSink } from '../core/jsonwrite';
 import type { IndexDb, IndexKey, IndexSave, ManifestIndex } from '../core/manifest';
 import { dateOf, saveIdOf } from '../core/savemeta';
 import { databases, type DbKey } from '../store/idb';
-import { openDbReader } from '../store/idb/dump';
+import { openDbReader, type DbReader } from '../store/idb/dump';
 import { readLocal, readSession } from '../store/local';
 import { readIdbModLists } from '../store/mods';
 import { readDetails, readLegacy, readSaves } from '../store/saves';
 import type { BlobTable } from './blob';
 import { encodeValue, collectBlobRefs } from './encode';
+import { assertSupported } from './graph';
 
 /**
  * 一个分区：`write` 负责序列化进 sink。小分区一次写完；整库从一致性缓存分页编码。
@@ -38,6 +41,8 @@ export interface SectionTask {
 export interface BuiltSections {
   /** 选中的模组存储名；字节由打包阶段逐条读，不在这里落地 */
   modNames: string[];
+  /** 无法无损编码、按「跳过」策略放弃的地址 */
+  skipped: string[];
   /** 分区 JSON 引用到的数据块；打包侧据此做引用闭合，`BlobTable` 只留这些 */
   refs: Set<string>;
   /** 建树用的条目目录，随 manifest 进包：恢复页解压它就能把树种出来 */
@@ -56,6 +61,11 @@ export interface BuildInput {
    * `label` 是正在处理的文件名：分区内部（例如 143 MB 的整库）没有可报的细分进度。
    */
   onProgress?: (ratio: number, label?: string) => void;
+  /**
+   * 遇到无法无损编码的记录时怎么办。缺省中止整次导出：没有完整数据就不写包。
+   * `skip` 只在用户确认后使用（快照），跳过的地址会写进清单，恢复时受保护。
+   */
+  onUnsupported?: 'abort' | 'skip';
 }
 
 /** 小分区：整个对象一次写完 */
@@ -111,6 +121,34 @@ function jsonSize(value: unknown): number {
 const PAGE = 1000;
 
 /**
+ * 跳过策略下的预检：整库只要有一条记录无法无损编码，就整库不进包。
+ *
+ * 库的记录已经在 `openDbReader` 里缓存好，这里只走结构、不算哈希、不读 Blob；
+ * 跳过整库而不是跳过单条，否则恢复时的镜像删除会把没进包的那条当成「本机多余」。
+ */
+async function acceptsDatabase(reader: DbReader): Promise<boolean> {
+  try {
+    for (const store of reader.stores) {
+      let after: DbKey | undefined;
+      for (;;) {
+        const page = await reader.page(store.name, after, PAGE);
+        if (page.length === 0) break;
+        for (const record of page) {
+          assertSupported(record.key, `${store.name}/key`);
+          assertSupported(record.value, store.name);
+        }
+        after = page[page.length - 1].key;
+        if (page.length < PAGE) break;
+      }
+    }
+    return true;
+  } catch (error) {
+    if ((error as { id?: string }).id === 'unsupportedValue') return false;
+    throw error;
+  }
+}
+
+/**
  * 整库分区：边翻页边写。
  *
  * 单事务缓存整库原始记录后分页编码，接受原始对象图常驻的内存代价。
@@ -121,8 +159,10 @@ function databaseTask(
   names: readonly string[],
   blobs: BlobTable,
   refs: Set<string>,
-  /** 每个库写完交一次字节数；库在导出途中消失时给 null，索引里就不收它 */
+  /** 每个库写完交一次字节数；库在导出途中消失或被跳过时给 null，索引里就不收它 */
   onDatabaseDone: (name: string, bytes: number | null) => void,
+  policy: 'abort' | 'skip',
+  skipped: Set<string>,
 ): SectionTask {
   const task: SectionTask = {
     file: 'idb.json',
@@ -145,7 +185,13 @@ function databaseTask(
         const before = written;
         const reader = await openDbReader(name);
         if (!reader) throw messageError('packSelectionMissing', name);
-        if (reader) {
+        if (policy === 'skip' && !(await acceptsDatabase(reader))) {
+          skipped.add(idbAddr(name));
+          reader.close();
+          onDatabaseDone(name, null);
+          continue;
+        }
+        {
           dbs += 1;
           try {
             if (!firstDb) writer.raw(',');
@@ -186,7 +232,7 @@ function databaseTask(
           }
         }
         await writer.flush();
-        onDatabaseDone(name, reader ? written - before : null);
+        onDatabaseDone(name, written - before);
       }
       writer.raw(']}');
       await writer.flush();
@@ -222,8 +268,10 @@ function namesOfScheme(selected: ReadonlySet<string>, scheme: 'idb' | 'mod'): st
  */
 const SECTION_WEIGHT = { keys: 5, saves: 20, idb: 60, mods: 15 } as const;
 
-export async function buildSections({ selected, blobs, onSection, onProgress }: BuildInput): Promise<BuiltSections> {
+export async function buildSections({ selected, blobs, onSection, onProgress, onUnsupported }: BuildInput): Promise<BuiltSections> {
   const refs = new Set<string>();
+  const policy = onUnsupported ?? 'abort';
+  const skipped = new Set<string>();
   const index: ManifestIndex = { keys: [], saves: [], legacy: false, dbs: [] };
 
   const slots = saveSlots(selected);
@@ -288,16 +336,29 @@ export async function buildSections({ selected, blobs, onSection, onProgress }: 
     for (const slot of slots) {
       if (!picked.some(record => record.slot === slot)) throw messageError('packSelectionMissing', String(slot));
     }
-    const encoded = await Promise.all(
-      picked.map(async record => ({
-        slot: record.slot,
-        data: await encodeValue(record.data, blobs, `saves/${record.slot}`),
-      })),
-    );
+    const encoded: { slot: number; data: unknown }[] = [];
+    for (const record of picked) {
+      try {
+        encoded.push({ slot: record.slot, data: await encodeValue(record.data, blobs, `saves/${record.slot}`) });
+      } catch (error) {
+        if (policy !== 'skip' || (error as { id?: string }).id !== 'unsupportedValue') throw error;
+        // 单条存档无法无损编码：整槽（含 details）都不进包，记下地址供恢复侧保护
+        skipped.add(saveAddr(record.slot));
+      }
+    }
+    const kept = new Set(encoded.map(record => record.slot));
     const detailBySlot = new Map(details.filter(record => slots.has(record.slot)).map(record => [record.slot, record.data]));
-    const detailRows = details
-      .filter(record => slots.has(record.slot))
-      .map(record => ({ slot: record.slot, data: record.data }));
+    const detailRows: { slot: number; data: unknown }[] = [];
+    for (const record of details) {
+      if (!kept.has(record.slot)) continue;
+      try {
+        detailRows.push({ slot: record.slot, data: await encodeValue(record.data, blobs, `saves/${record.slot}/details`) });
+      } catch (error) {
+        if (policy !== 'skip' || (error as { id?: string }).id !== 'unsupportedValue') throw error;
+        // 详情编不了就地丢掉这一行：存档本体仍可恢复，标题与时间退化成槽号
+        skipped.add(saveAddr(record.slot));
+      }
+    }
     const legacy = wantLegacy ? readLegacy() : { saves: null, details: null };
     if (wantLegacy && legacy.saves === null) throw messageError('packSelectionMissing', LEGACY_SAVE_ADDR);
     const entries = encoded.length + detailRows.length + (legacy.saves !== null ? 1 : 0);
@@ -305,13 +366,13 @@ export async function buildSections({ selected, blobs, onSection, onProgress }: 
       announce('saves.json');
       const task = plainSection('saves.json', { engine: 'idb', saves: encoded, details: detailRows, legacy }, entries, refs);
       // 清单与索引各记一份槽数：读包时据此精确对照，不必猜 details 有没有孤儿
-      task.slots = picked.length;
+      task.slots = encoded.length;
       await onSection(task);
     }
 
     // 索引与分区同源：标题、时间、ID 都取自同一份 details，恢复页不必再解压 saves.json
     const blobBytes = new Map(blobs.list().map(item => [item.blob.file, item.blob.bytes]));
-    index.saves = picked.map<IndexSave>((record, at) => {
+    index.saves = encoded.map<IndexSave>((record, at) => {
       const detail = detailBySlot.get(record.slot);
       const meta = detail && typeof detail === 'object' ? (detail as Record<string, unknown>) : null;
       const title = meta?.title;
@@ -344,10 +405,10 @@ export async function buildSections({ selected, blobs, onSection, onProgress }: 
       // 每读完一个库推进一份；整库的进度就在这一段里，不再有更细的刻度
       const dbIndex: IndexDb[] = [];
       await onSection(databaseTask(names, blobs, refs, (name, bytes) => {
-        // 库在导出途中消失就没有索引项，恢复页也就不会列它
+        // 库在导出途中消失或被跳过就没有索引项，恢复页也就不会列它
         if (bytes !== null) dbIndex.push({ name, b: bytes });
         advance('idb', 1 / names.length, 'idb.json');
-      }));
+      }, policy, skipped));
       index.dbs = dbIndex;
     } else {
       advance('idb');
@@ -372,5 +433,5 @@ export async function buildSections({ selected, blobs, onSection, onProgress }: 
   }
   advance('mods');
 
-  return { modNames, refs, index };
+  return { modNames, refs, index, skipped: [...skipped] };
 }

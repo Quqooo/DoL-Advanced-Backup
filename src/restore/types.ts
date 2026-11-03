@@ -59,7 +59,11 @@ export type RestoreWarningCode =
   | 'newer-package'
   | 'missing-entry'
   | 'skipped-mod'
-  | 'mirror-skipped';
+  | 'mirror-skipped'
+  /** 旧包里的 Cookie 条目：不恢复、不删除，只在报告里计数 */
+  | 'cookie-unsupported'
+  /** 包里记录了导出时跳过的条目：这些地址不参与镜像删除 */
+  | 'partial-package';
 
 export interface RestoreWarning {
   code: RestoreWarningCode;
@@ -83,6 +87,8 @@ export interface RestorePlan {
   available: Set<string>;
   /** 本机现状（导入时现采）；镜像与删除预告都拿它和勾选集做差 */
   local: Item[] | null;
+  /** 导出时被跳过的地址：不写入，也不参与镜像删除 */
+  protected: ReadonlySet<string>;
   warnings: RestoreWarning[];
 }
 

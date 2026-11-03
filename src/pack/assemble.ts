@@ -73,9 +73,10 @@ export async function packTo(
   const blobs = new BlobTable();
   const sectionEntries: ZipEntry[] = [];
   const sectionMeta: ManifestSection[] = [];
-  const { modNames, refs, index } = await buildSections({
+  const { modNames, refs, index, skipped } = await buildSections({
     selected,
     blobs,
+    ...(options.onUnsupported ? { onUnsupported: options.onUnsupported } : {}),
     onProgress: (ratio, label) => emit('collect', ratio * COLLECT_END, label),
     onSection: async task => {
       throwIfAborted(hooks.signal);
@@ -129,6 +130,11 @@ export async function packTo(
   });
   manifest.sections = sectionMeta;
   manifest.index = index;
+  // 跳过的条目不在包里：恢复侧据这份名单保护本机同名数据，不做镜像删除
+  if (skipped.length > 0) {
+    manifest.options.partial = true;
+    manifest.options.skipped = skipped;
+  }
 
   const reader = await openModReader();
   try {

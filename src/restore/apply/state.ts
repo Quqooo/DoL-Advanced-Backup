@@ -21,6 +21,8 @@ export interface ApplyState {
   plan: RestorePlan;
   selected: ReadonlySet<string>;
   selfPack: boolean;
+  /** 包格式：1 与 2 用不同的值解码器 */
+  format: 1 | 2;
   resolve: BlobResolver;
   report: RestoreReport;
   /** 本机已有的库名，判「库在就跳过」用 */

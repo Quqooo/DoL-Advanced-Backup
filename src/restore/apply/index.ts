@@ -3,7 +3,9 @@ import { messageError, throwIfAborted } from '../../core/error';
 import { verifySectionIndex } from '../plan/sections';
 import type { Item } from '../../core/item';
 import type { Category } from '../../core/types';
-import { collectBlobRefs, decodeValue } from '../../pack/encode';
+import { collectBlobRefs } from '../../pack/encode';
+import { createDecoder } from '../../pack/decode';
+import { validateEncoded } from '../../pack/validate';
 import { databases } from '../../store/idb';
 import { removePendingDrop } from '../../store/pending-drop';
 import { loadBlobs } from '../bundle';
@@ -38,6 +40,12 @@ async function validatePayloads(plan: RestorePlan, selected: ReadonlySet<string>
     for (const [file, bytes] of await loadBlobs(plan.bundle, refs)) blobs.set(file, bytes);
   };
   const resolve = (file: string): Uint8Array | null => blobs.get(file) ?? null;
+  // v2 走结构校验，不建对象图；v1 仍是宽松解码，旧包里的写法不能被严格规则拒掉
+  const format = plan.bundle.manifest.format === 1 ? 1 : 2;
+  const check = (value: unknown, path: string): void => {
+    if (format === 2) validateEncoded(value, resolve, path);
+    else createDecoder(1, resolve).decode(value);
+  };
   let sectionOf: Awaited<ReturnType<typeof openDbSections>> | undefined;
   for (const addr of selected) {
     const item = plan.items.find(item => item.addr === addr);
@@ -47,20 +55,20 @@ async function validatePayloads(plan: RestorePlan, selected: ReadonlySet<string>
       const record = plan.sections.saves?.saves.find(record => record.slot === slot);
       if (!record) throw messageError('bundleAddressMismatch');
       await loadRefs(record.data);
-      decodeValue(record.data, resolve);
+      check(record.data, `save/${slot}`);
       const detail = plan.sections.saves?.details.find(record => record.slot === slot);
       if (detail) {
         await loadRefs(detail.data);
-        decodeValue(detail.data, resolve);
+        check(detail.data, `save/${slot}/details`);
       }
     } else if (item.kind === 'idb') {
       sectionOf ??= await openDbSections(plan);
       const db = sectionOf(nameOfAddr(addr) ?? '');
       await loadRefs(db);
-      // 每条解码结果立即释放，不额外构造整库解码对象图。
+      // 每条独立校验，不构造整库解码对象图。
       for (const store of db.stores) for (const record of store.records) {
-        decodeValue(record.key, resolve);
-        decodeValue(record.value, resolve);
+        check(record.key, `${nameOfAddr(addr) ?? ''}/${store.name}/key`);
+        check(record.value, `${nameOfAddr(addr) ?? ''}/${store.name}`);
       }
     }
   }
@@ -120,7 +128,9 @@ export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
    * 删除名单在写入之前就要算好：模组包写列表时要知道哪些包随后会被卸载，
    * 否则顺序列表里会留下一批已经不存在的名字（ModLoaderGui 会列出来、重载还会报错）。
    */
-  const dropped = mirrorCandidates(input.plan.local, input.selected, keepSelf, scope);
+  // 跳过条目与勾选条目同样受保护：它们不在包里，不能因此被当成「本机多余」
+  const guarded = new Set([...input.selected, ...(input.plan.protected ?? [])]);
+  const dropped = mirrorCandidates(input.plan.local, guarded, keepSelf, scope);
   const droppedMods = new Set(
     dropped
       .filter(item => item.kind === 'mod')
@@ -133,6 +143,7 @@ export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
     plan: input.plan,
     selected: input.selected,
     selfPack: input.selfPack === true,
+    format: input.plan.bundle.manifest.format === 1 ? 1 : 2,
     resolve: file => blobs.get(file) ?? null,
     report,
     dbNames: new Set((await databases()).map(item => item.name)),
@@ -143,7 +154,7 @@ export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
   const steps: Step[] = [
     { category: 'saves', label: 'saves', kinds: ['save'], run: () => applySaves(state) },
     { category: 'saves', label: 'legacy', kinds: ['save-legacy'], run: () => applyLegacy(state) },
-    { category: 'settings', label: 'keys', kinds: ['ls', 'ss', 'ck'], run: () => applyKeys(state) },
+    { category: 'settings', label: 'keys', kinds: ['ls', 'ss'], run: () => applyKeys(state) },
     { category: 'other', label: 'idb', kinds: ['idb'], run: () => applyDbs(state) },
     { category: 'mods', label: 'mods', kinds: ['mod', 'mod-list'], run: () => applyMods(state) },
   ];
@@ -184,7 +195,7 @@ export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
     const failed = new Set<Category>([...report.failures.map(item => item.category), ...stepFailures]);
     const mirror = await mirrorPlan({
       plan: input.plan,
-      selected: input.selected,
+      selected: guarded,
       keepSelf,
       scope,
       failed,

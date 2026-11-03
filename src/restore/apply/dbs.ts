@@ -11,7 +11,8 @@ import { categoryOfGroup } from '../../core/item';
 import { parseJson } from '../../core/json';
 import { findValueStart, jsonRange, splitElements, textOf, type JsonRange } from '../../core/jsonscan';
 import type { RestoreMode } from '../../core/types';
-import { decodeValue, type BlobResolver } from '../../pack/encode';
+import { createDecoder } from '../../pack/decode';
+import type { BlobResolver } from '../../pack/graph';
 import { writeAddr } from '../../store/address';
 import { close, getAllWithKeys, openDb, type DbKey } from '../../store/idb';
 import type { DbDump } from '../../store/idb/dump';
@@ -77,14 +78,15 @@ async function mergeOrderRecord(section: DbSection): Promise<void> {
  * 就地解码：这段 JSON 是刚解析出来、独占的，再复制一份等于让这个库的对象图翻倍。
  * 解完立刻交给 `writeDatabase`，写完这一段就丢掉。
  */
-function decodeDbInPlace(section: DbSection, resolve: BlobResolver): DbDump {
+function decodeDbInPlace(section: DbSection, resolve: BlobResolver, format: 1 | 2): DbDump {
   for (const store of section.stores) {
     store.keyPath = store.keyPath ?? null;
     store.autoIncrement = store.autoIncrement === true;
     store.indexes = store.indexes ?? [];
     for (const record of store.records) {
-      record.key = decodeValue(record.key, resolve) as DbKey;
-      record.value = decodeValue(record.value, resolve);
+      // 每条记录一个解码器：IDB 的记录之间不共享对象，引用表也不该跨记录
+      record.key = createDecoder(format, resolve).decode(record.key) as DbKey;
+      record.value = createDecoder(format, resolve).decode(record.value);
     }
   }
   return section as unknown as DbDump;
@@ -145,7 +147,7 @@ export async function applyDbs(state: ApplyState): Promise<void> {
     try {
       const outcome = await writeAddr(
         item.addr,
-        { form: 'db', value: decodeDbInPlace(section, state.resolve) },
+        { form: 'db', value: decodeDbInPlace(section, state.resolve, state.format) },
         { recreate: replacesDb(state.plan.mode) },
       );
       if (outcome.missingStores && outcome.missingStores.length > 0) {
