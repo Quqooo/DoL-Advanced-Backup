@@ -2,7 +2,6 @@ import { nameOfAddr } from '../../core/address';
 import { categoryOfGroup } from '../../core/item';
 import { PROGRESS_FEATS } from '../../core/keys';
 import { writeAddr } from '../../store/address';
-import { readCookies } from '../../store/cookies';
 import { readKey } from '../../store/local';
 import { mergeFeats } from '../merge';
 import { bump, fail, picked, type ApplyState } from './state';
@@ -23,13 +22,9 @@ function mergeFeatsValue(local: string, incoming: string): string {
 }
 
 export async function applyKeys(state: ApplyState): Promise<void> {
-  const items = picked(state, 'ls').concat(picked(state, 'ss'), picked(state, 'ck'));
+  const items = picked(state, 'ls').concat(picked(state, 'ss'));
   if (items.length === 0) return;
   const entries = new Map((state.plan.sections.keys?.items ?? []).map(entry => [entry.a, entry.v]));
-  // Cookie 的「本机已有」要单独问 document.cookie：读 localStorage 的问不出它
-  const cookies = items.some(item => item.kind === 'ck')
-    ? new Set(readCookies().map(entry => entry.name))
-    : null;
 
   let seen = 0;
   for (const item of items) {
@@ -41,24 +36,14 @@ export async function applyKeys(state: ApplyState): Promise<void> {
     }
     const category = categoryOfGroup(item.group);
     const key = nameOfAddr(item.addr) ?? '';
-    const text = item.kind === 'ck' ? null : item.kind === 'ls' ? readKey(key) : readKey(key, 'session');
-    const exists = item.kind === 'ck' ? (cookies?.has(key) ?? false) : text !== null;
+    const text = item.kind === 'ls' ? readKey(key) : readKey(key, 'session');
+    const exists = text !== null;
 
     // 成就表在合并与补缺下都按语义合并；其余键（含剧情标记、世界快照）走「其他」规则：
     // 合并与覆盖都是整键覆盖，补缺时本机已有就跳过。
     const mergeable = key === PROGRESS_FEATS && text !== null;
     if (state.plan.mode === 'missing' && exists && !mergeable) {
       bump(state.report, item, 'skipped');
-      continue;
-    }
-
-    if (item.kind === 'ck') {
-      try {
-        await writeAddr(item.addr, { form: 'cookie', value: incoming });
-        bump(state.report, item, 'applied');
-      } catch (error) {
-        fail(state.report, category, item.addr, error);
-      }
       continue;
     }
 

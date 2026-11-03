@@ -36,8 +36,9 @@ export function itemsOfKeys(section: KeysSection, ctx: GroupContext): Item[] {
   const items: Item[] = [];
   for (const entry of section.items) {
     const kind = kindOfAddr(entry.a);
-    // 键分区只放单键：坏地址或别的方案说明包被改过，跳过而不是猜
-    if (kind !== 'ls' && kind !== 'ss' && kind !== 'ck') continue;
+    // 键分区只放单键：坏地址或别的方案说明包被改过，跳过而不是猜。
+    // `ck` 是旧包里的 Cookie，已退出恢复范围，不再上树。
+    if (kind !== 'ls' && kind !== 'ss') continue;
     items.push({ addr: entry.a, kind, group: groupOfKnown(entry.a, ctx) });
   }
   return items;
@@ -151,8 +152,9 @@ export function itemsOfIndex(index: ManifestIndex, ctx: GroupContext): Item[] {
 
   for (const entry of index.keys) {
     const kind = kindOfAddr(entry.a);
-    // 地址被改坏就跳过：索引来自导出侧，正常不会出现，出现说明包被动过
-    if (kind !== 'ls' && kind !== 'ss' && kind !== 'ck') continue;
+    // 地址被改坏就跳过：索引来自导出侧，正常不会出现，出现说明包被动过。
+    // `ck` 是旧包里的 Cookie，已退出恢复范围，不再上树。
+    if (kind !== 'ls' && kind !== 'ss') continue;
     items.push({ addr: entry.a, kind, group: groupOfKnown(entry.a, ctx), bytes: entry.b });
   }
 

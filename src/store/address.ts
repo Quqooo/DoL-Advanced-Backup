@@ -4,7 +4,6 @@ import {
   LEGACY_SAVE_ADDR,
   MOD_HIDDEN_ADDR,
   MOD_ORDER_ADDR,
-  cookieAddr,
   idbAddr,
   lsAddr,
   modAddr,
@@ -15,7 +14,6 @@ import {
 import { textByteLength } from '../core/format';
 import { clearDatabase, databases } from './idb';
 import { writeDatabase, type DbDump } from './idb/dump';
-import { readCookies, removeCookie, writeCookie } from './cookies';
 import { readKey, readLocal, readSession, removeKeys, writeKey } from './local';
 import {
   deleteModValue,
@@ -40,7 +38,6 @@ import { deleteSaves, detailTime, gameDbName, readDetails, readLegacy, readSaves
 
 export type StoragePayload =
   | { form: 'text'; value: string }
-  | { form: 'cookie'; value: string }
   | { form: 'db'; value: DbDump }
   | { form: 'save'; save: unknown; detail: unknown }
   | { form: 'legacy'; saves: string | null; details: string | null };
@@ -76,17 +73,14 @@ export async function writeAddr(
 ): Promise<WriteOutcome> {
   const parsed = parseAddr(addr);
   if (!parsed) throw messageError('addrInvalid', addr);
+  // 旧包里的 Cookie 条目：解析仍认它，但不写、不删
+  if (parsed.scheme === 'ck') throw messageError('addrInvalid', addr);
 
   switch (payload.form) {
     case 'text': {
       if (parsed.scheme !== 'ls' && parsed.scheme !== 'ss') throw messageError('addrMismatch', addr);
       const kind = parsed.scheme === 'ss' ? 'session' : 'local';
       if (!writeKey(parsed.name, payload.value, kind)) throw messageError('writeFailed');
-      return { count: 1 };
-    }
-    case 'cookie': {
-      if (parsed.scheme !== 'ck') throw messageError('addrMismatch', addr);
-      if (!writeCookie({ name: parsed.name, value: payload.value })) throw messageError('writeFailed');
       return { count: 1 };
     }
     case 'db': {
@@ -138,11 +132,9 @@ export async function removeAddr(addr: string): Promise<boolean> {
       removeKeys([parsed.name], kind);
       return true;
     }
-    case 'ck': {
-      if (!readCookies().some(entry => entry.name === parsed.name)) return false;
-      removeCookie(parsed.name);
-      return true;
-    }
+    case 'ck':
+      // 旧包里的 Cookie 条目不恢复，也不从本机删除
+      return false;
     case 'idb':
       // 清空各仓而不是删除库：见 `clearDatabase`
       return (await clearDatabase(parsed.name)) > 0;
@@ -187,14 +179,6 @@ export async function listAddrs(): Promise<AddrInfo[]> {
       bytes: textByteLength(entry.key) + textByteLength(entry.value),
     });
   }
-  for (const cookie of readCookies()) {
-    out.push({
-      addr: cookieAddr(cookie.name),
-      label: cookie.name,
-      bytes: textByteLength(cookie.name) + textByteLength(cookie.value),
-    });
-  }
-
   const legacy = readLegacy();
   if (legacy.saves !== null || legacy.details !== null) {
     out.push({

@@ -82,9 +82,6 @@ const STATIC_DB_GROUPS: readonly { dbs: readonly string[]; group: string }[] = [
   { dbs: [IMAGE_FILELIST_DB, IMAGE_STORE_DB], group: 'mods/image-cache' },
 ];
 
-/** Cookie 恒归自己那一组：它的 Domain 属性只有一条可读，没必要再分域名 */
-export const COOKIE_GROUP = 'other/cookie';
-
 /** 图像包缓存库：能重建，标准档与模组档都不勾 */
 export const IMAGE_CACHE_GROUP = 'mods/image-cache';
 
@@ -155,7 +152,8 @@ export function groupOf(addr: string, ctx: GroupContext, flags?: ItemFlags): str
         ?? mappingGroup(ctx.mapping, 'sessionKey', parsed.name)
         ?? otherGroup(ctx);
     case 'ck':
-      return COOKIE_GROUP;
+      // 旧包里的 Cookie 条目不恢复、不显示，也不参与分组
+      return null;
     case 'idb':
       return staticDbGroupOf(parsed.name) ?? mappingGroup(ctx.mapping, 'db', parsed.name) ?? otherGroup(ctx);
     case 'save':

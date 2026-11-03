@@ -2,7 +2,6 @@ import {
   LEGACY_SAVE_ADDR,
   MOD_HIDDEN_ADDR,
   MOD_ORDER_ADDR,
-  cookieAddr,
   lsAddr,
   nameOfAddr,
   parseAddr,
@@ -13,7 +12,6 @@ import { messageError } from '../core/error';
 import { createJsonWriter, type JsonSink } from '../core/jsonwrite';
 import type { IndexDb, IndexKey, IndexSave, ManifestIndex } from '../core/manifest';
 import { dateOf, saveIdOf } from '../core/savemeta';
-import { readCookies } from '../store/cookies';
 import { databases, type DbKey } from '../store/idb';
 import { openDbReader } from '../store/idb/dump';
 import { readLocal, readSession } from '../store/local';
@@ -220,7 +218,7 @@ function namesOfScheme(selected: ReadonlySet<string>, scheme: 'idb' | 'mod'): st
 
 /**
  * 各分区的相对耗时，只用于切分采集阶段的进度：整库要解码上万条记录并序列化上亿字节，
- * 键与 cookies 接近瞬时。
+ * 键分区接近瞬时。
  */
 const SECTION_WEIGHT = { keys: 5, saves: 20, idb: 60, mods: 15 } as const;
 
@@ -263,7 +261,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress }: 
     if (totalWeight > 0) onProgress?.(doneWeight / totalWeight, file);
   };
 
-  /* ---------- 键：localStorage / sessionStorage / Cookie ---------- */
+  /* ---------- 键：localStorage / sessionStorage ---------- */
   const keys: { a: string; v: string }[] = [];
   for (const entry of readLocal()) {
     const addr = lsAddr(entry.key);
@@ -273,12 +271,8 @@ export async function buildSections({ selected, blobs, onSection, onProgress }: 
     const addr = ssAddr(entry.key);
     if (selected.has(addr)) keys.push({ a: addr, v: entry.value });
   }
-  for (const cookie of readCookies()) {
-    const addr = cookieAddr(cookie.name);
-    if (selected.has(addr)) keys.push({ a: addr, v: cookie.value });
-  }
   for (const addr of selected) {
-    if (/^(ls|ss|ck):/.test(addr) && !keys.some(item => item.a === addr)) throw messageError('packSelectionMissing', addr);
+    if (/^(ls|ss):/.test(addr) && !keys.some(item => item.a === addr)) throw messageError('packSelectionMissing', addr);
   }
   if (keys.length > 0) {
     announce('keys.json');

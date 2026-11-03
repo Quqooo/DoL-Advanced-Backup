@@ -47,7 +47,7 @@ function chinesePart(manifest: Manifest, selfRestore: boolean): string {
         ]
       : []),
     '  mapping.json         外部模组数据的分组映射；恢复页据此显示分组名',
-    '  keys.json            浏览器存储里的单个键：localStorage、sessionStorage、Cookie',
+    '  keys.json            浏览器存储里的单个键：localStorage、sessionStorage',
     '  saves.json           存档槽与存档明细，两者按槽号一一对应',
     '  idb.json             整份 IndexedDB 库：仓库、索引与全部记录',
     '  mods.json            模组的启用顺序与禁用列表',
@@ -95,7 +95,7 @@ function englishPart(manifest: Manifest, selfRestore: boolean): string {
         ]
       : []),
     '  mapping.json         Group mapping for mod data. The restore tab uses it for group names',
-    '  keys.json            Single keys in browser storage: localStorage, sessionStorage, Cookie',
+    '  keys.json            Single keys in browser storage: localStorage, sessionStorage',
     '  saves.json           Save slots and save details, paired by slot number',
     '  idb.json             Whole IndexedDB databases: stores, indexes, and all records',
     '  mods.json            Mod load order and disabled list',

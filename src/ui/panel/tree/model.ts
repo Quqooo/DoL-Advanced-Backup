@@ -101,7 +101,6 @@ export function groupTitle(group: string): string {
     const entry = byMod(mod);
     return entry ? mappingLabel(entry.label, entry.source) : mod;
   }
-  if (group === 'other/cookie') return strings.cookieDomain(window.location.hostname || '—');
   if (group.startsWith('other/')) return strings.currentOrigin(group.slice('other/'.length));
   if (group === 'other') return strings.groups.other;
   return group;
@@ -184,7 +183,7 @@ export function badgesOf(item: Item): string[] {
       out.push(tText(badgeFor('db', parsed.name)));
       break;
     default:
-      // Cookie、存档、模组包没有映射通道
+      // 存档、模组包没有映射通道
       break;
   }
   return out.filter(Boolean);

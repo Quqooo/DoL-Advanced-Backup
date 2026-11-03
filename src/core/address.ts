@@ -57,9 +57,7 @@ export function ssAddr(key: string): string {
   return `ss:${escapePart(key)}`;
 }
 
-export function cookieAddr(name: string): string {
-  return `ck:${escapePart(name)}`;
-}
+/** `ck:` 只为识别旧包保留：Cookie 已退出备份与恢复范围，本文件不再构造这种地址。 */
 
 /** 整库：结构、索引与全部记录都在这一条里 */
 export function idbAddr(database: string): string {
