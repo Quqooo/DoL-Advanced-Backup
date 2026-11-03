@@ -226,6 +226,18 @@ export function countRefs(root: unknown, basePath = ''): WeakMap<object, number>
   const seen = new WeakSet<object>();
   let nodes = 0;
 
+  /** 所有子节点都经过这里：函数与符号在任何容器里都要当场判不支持，不能等到写入阶段才抛 */
+  const child = (value: unknown, path: string, depth: number): void => {
+    if (typeof value === 'function' || typeof value === 'symbol') {
+      unsupported(typeof value === 'function' ? 'Function' : 'Symbol', path);
+    }
+    if (typeof value !== 'object' || value === null) return;
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+    if (seen.has(value)) return;
+    seen.add(value);
+    visit(value, path, depth + 1);
+  };
+
   const visit = (object: object, path: string, depth: number): void => {
     if (++nodes > MAX_NODES) throw messageError('valueNodeLimit', path);
     if (depth > MAX_DEPTH) throw messageError('valueDepthExceeded', path);
@@ -235,52 +247,25 @@ export function countRefs(root: unknown, basePath = ''): WeakMap<object, number>
     switch (shape.kind) {
       case 'array': {
         for (const index of presentIndices(object as readonly unknown[])) {
-          const child = (object as readonly unknown[])[index];
-          if (typeof child === 'object' && child !== null) {
-            counts.set(child, (counts.get(child) ?? 0) + 1);
-            if (!seen.has(child)) {
-              seen.add(child);
-              visit(child, childPath(path, index), depth + 1);
-            }
-          }
+          child((object as readonly unknown[])[index], childPath(path, index), depth);
         }
         return;
       }
       case 'map': {
         for (const [key, item] of object as Map<unknown, unknown>) {
-          for (const child of [key, item]) {
-            if (typeof child === 'object' && child !== null) {
-              counts.set(child, (counts.get(child) ?? 0) + 1);
-              if (!seen.has(child)) {
-                seen.add(child);
-                visit(child, path, depth + 1);
-              }
-            }
-          }
+          child(key, path, depth);
+          child(item, path, depth);
         }
         return;
       }
       case 'set': {
         for (const item of object as Set<unknown>) {
-          if (typeof item === 'object' && item !== null) {
-            counts.set(item, (counts.get(item) ?? 0) + 1);
-            if (!seen.has(item)) {
-              seen.add(item);
-              visit(item, path, depth + 1);
-            }
-          }
+          child(item, path, depth);
         }
         return;
       }
       case 'error': {
-        const cause = (object as { cause?: unknown }).cause;
-        if (hasOwn(object, 'cause') && typeof cause === 'object' && cause !== null) {
-          counts.set(cause, (counts.get(cause) ?? 0) + 1);
-          if (!seen.has(cause)) {
-            seen.add(cause);
-            visit(cause, childPath(path, 'cause'), depth + 1);
-          }
-        }
+        if (hasOwn(object, 'cause')) child((object as { cause?: unknown }).cause, childPath(path, 'cause'), depth);
         return;
       }
       case 'geometry':
@@ -288,26 +273,12 @@ export function countRefs(root: unknown, basePath = ''): WeakMap<object, number>
         // 点按值编码，不参与引用表
         return;
       case 'view': {
-        const buffer = (object as ArrayBufferView).buffer;
-        counts.set(buffer, (counts.get(buffer) ?? 0) + 1);
-        if (!seen.has(buffer)) {
-          seen.add(buffer);
-          visit(buffer, childPath(path, 'buffer'), depth + 1);
-        }
+        child((object as ArrayBufferView).buffer, childPath(path, 'buffer'), depth);
         return;
       }
       case 'object': {
         for (const key of Object.keys(object)) {
-          const child = (object as Record<string, unknown>)[key];
-          if (typeof child === 'object' && child !== null) {
-            counts.set(child, (counts.get(child) ?? 0) + 1);
-            if (!seen.has(child)) {
-              seen.add(child);
-              visit(child, childPath(path, key), depth + 1);
-            }
-          } else if (typeof child === 'function' || typeof child === 'symbol') {
-            unsupported(typeof child === 'function' ? 'Function' : 'Symbol', childPath(path, key));
-          }
+          child((object as Record<string, unknown>)[key], childPath(path, key), depth);
         }
         return;
       }
@@ -333,4 +304,27 @@ export function assertSupported(value: unknown, basePath = ''): void {
 
 export function quadPoints(quad: DOMQuad): unknown[] {
   return [quad.p1, quad.p2, quad.p3, quad.p4];
+}
+
+/**
+ * 编码结果里这个值是不是数组：被共享或成环的数组会包成 `$ab:arr`。
+ * 只用于读取编码后的数据（索引、界面标记），不用于解码。
+ */
+export function isEncodedArray(value: unknown): boolean {
+  return Array.isArray(value) || (isRecord(value) && hasOwn(value, ARR));
+}
+
+/**
+ * 取编码对象的字段。
+ *
+ * 普通对象自带 `$ab:` 开头的键时会被包进 `$ab:obj`，字段不在第一层；
+ * 读编码后的数据必须走这里，否则这类记录的字段会被当成不存在。
+ */
+export function fieldOfEncoded(value: unknown, key: string): unknown {
+  if (!isRecord(value)) return undefined;
+  if (hasOwn(value, OBJ)) {
+    const inner = value[OBJ];
+    return isRecord(inner) ? inner[key] : undefined;
+  }
+  return value[key];
 }
