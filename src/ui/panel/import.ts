@@ -373,13 +373,14 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     const selected = [...tree.selection()];
     const keepSelf = keepSelfBox.checked;
     void (async () => {
-      const otherDeletions = Object.values(deletionsOf(current, selected, keepSelf))
-        .reduce<number>((sum, count) => sum + (count ?? 0), 0);
-      if (otherDeletions > 0) {
-        // 未识别数据可能装着同域其他应用的东西，删它要单独确认
+      const forecast = deletionsOf(current, selected, keepSelf);
+      const deletions = Object.values(forecast).reduce<number>((sum, count) => sum + (count ?? 0), 0);
+      if (deletions > 0) {
+        // 有删除就先确认；未识别数据可能装着同域其他应用的东西，单独多一句提醒
+        const other = forecast.other ?? 0;
         const ok = await confirmDialog({
           title: MODE_TEXT[currentMode](),
-          body: `<p>${t().deletableCount(otherDeletions)}</p>`,
+          body: `<p>${t().deletableCount(deletions)}</p>${other > 0 ? `<p>${t().confirmOther(other)}</p>` : ''}`,
           okLabel: t().startRestore,
           cancelLabel: t().cancelAction,
         });
