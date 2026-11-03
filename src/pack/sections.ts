@@ -347,6 +347,8 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
       }
     }
     const kept = new Set(encoded.map(record => record.slot));
+    /** 详情编不了时整槽放弃：只写存档本体、不写 details，游戏读不回标题与时间 */
+    const dropped = new Set<number>();
     const detailBySlot = new Map(details.filter(record => slots.has(record.slot)).map(record => [record.slot, record.data]));
     const detailRows: { slot: number; data: unknown }[] = [];
     for (const record of details) {
@@ -355,24 +357,25 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
         detailRows.push({ slot: record.slot, data: await encodeValue(record.data, blobs, `saves/${record.slot}/details`) });
       } catch (error) {
         if (policy !== 'skip' || (error as { id?: string }).id !== 'unsupportedValue') throw error;
-        // 详情编不了就地丢掉这一行：存档本体仍可恢复，标题与时间退化成槽号
+        dropped.add(record.slot);
         skipped.add(saveAddr(record.slot));
       }
     }
+    const rows = encoded.filter(record => !dropped.has(record.slot));
     const legacy = wantLegacy ? readLegacy() : { saves: null, details: null };
     if (wantLegacy && legacy.saves === null) throw messageError('packSelectionMissing', LEGACY_SAVE_ADDR);
-    const entries = encoded.length + detailRows.length + (legacy.saves !== null ? 1 : 0);
+    const entries = rows.length + detailRows.length + (legacy.saves !== null ? 1 : 0);
     if (entries > 0) {
       announce('saves.json');
-      const task = plainSection('saves.json', { engine: 'idb', saves: encoded, details: detailRows, legacy }, entries, refs);
+      const task = plainSection('saves.json', { engine: 'idb', saves: rows, details: detailRows, legacy }, entries, refs);
       // 清单与索引各记一份槽数：读包时据此精确对照，不必猜 details 有没有孤儿
-      task.slots = encoded.length;
+      task.slots = rows.length;
       await onSection(task);
     }
 
     // 索引与分区同源：标题、时间、ID 都取自同一份 details，恢复页不必再解压 saves.json
     const blobBytes = new Map(blobs.list().map(item => [item.blob.file, item.blob.bytes]));
-    index.saves = encoded.map<IndexSave>((record, at) => {
+    index.saves = rows.map<IndexSave>((record, at) => {
       const detail = detailBySlot.get(record.slot);
       const meta = detail && typeof detail === 'object' ? (detail as Record<string, unknown>) : null;
       const title = meta?.title;
@@ -386,7 +389,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
         ...(mtime === undefined ? {} : { date: mtime }),
         ...(saveId === undefined ? {} : { id: saveId }),
         ...(delta ? { delta: true } : {}),
-        b: encodedBytes(encoded[at].data, blobBytes) + (detail === undefined ? 0 : jsonSize(detail)),
+        b: encodedBytes(rows[at].data, blobBytes) + (detail === undefined ? 0 : jsonSize(detail)),
       };
     });
     index.legacy = legacy.saves !== null;
