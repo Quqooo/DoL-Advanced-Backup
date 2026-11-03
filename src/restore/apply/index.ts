@@ -47,8 +47,9 @@ async function validatePayloads(plan: RestorePlan, selected: ReadonlySet<string>
     else createDecoder(1, resolve).decode(value);
   };
   let sectionOf: Awaited<ReturnType<typeof openDbSections>> | undefined;
+  const byAddr = new Map(plan.items.map(item => [item.addr, item]));
   for (const addr of selected) {
-    const item = plan.items.find(item => item.addr === addr);
+    const item = byAddr.get(addr);
     if (!item) throw messageError('bundleAddressMismatch');
     if (item.kind === 'save') {
       const slot = slotOfAddr(addr);

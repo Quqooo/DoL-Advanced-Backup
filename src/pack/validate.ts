@@ -18,6 +18,7 @@ import {
   MAX_BYTE_LENGTH,
   MAX_DEPTH,
   MAX_NODES,
+  MAX_SPARSE_LENGTH,
   MIME,
   NUM,
   OBJ,
@@ -86,7 +87,11 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
 
     if (Array.isArray(node)) {
       for (const [index, item] of node.entries()) {
-        if (isRecord(item) && hasOwn(item, HOLE)) continue;
+        if (isRecord(item) && hasOwn(item, HOLE)) {
+          expectKeys(item, [HOLE], childPath(path, index));
+          if (item[HOLE] !== true) return shape(childPath(path, index));
+          continue;
+        }
         walk(item, childPath(path, index), depth + 1);
       }
       return;
@@ -128,13 +133,24 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
         }
         return;
       }
-      case SET:
+      case SET: {
+        expectKeys(record, [SET, ID], path);
+        const items = record[SET];
+        if (!Array.isArray(items)) return shape(path);
+        // Set 没有空洞：这里不能按数组元素跳过低洞标记
+        for (const [index, item] of items.entries()) walk(item, childPath(path, index), depth + 1);
+        return;
+      }
       case ARR: {
-        expectKeys(record, [marker, ID], path);
-        const items = record[marker];
+        expectKeys(record, [ARR, ID], path);
+        const items = record[ARR];
         if (!Array.isArray(items)) return shape(path);
         for (const [index, item] of items.entries()) {
-          if (isRecord(item) && hasOwn(item, HOLE)) continue;
+          if (isRecord(item) && hasOwn(item, HOLE)) {
+            expectKeys(item, [HOLE], childPath(path, index));
+            if (item[HOLE] !== true) return shape(childPath(path, index));
+            continue;
+          }
           walk(item, childPath(path, index), depth + 1);
         }
         return;
@@ -144,7 +160,9 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
         const spec = record[SPARSE];
         if (!isRecord(spec) || !Array.isArray(spec.items)) return shape(path);
         const length = spec.length;
-        if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) return shape(path);
+        if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0 || length > MAX_SPARSE_LENGTH) {
+          return shape(path);
+        }
         let previous = -1;
         for (const pair of spec.items) {
           if (!Array.isArray(pair) || pair.length !== 2) return shape(path);
@@ -167,7 +185,8 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
         let total: number | undefined;
         if (isRecord(buffer) && buffer[BUFFER] === true) total = blobLength(buffer[BLOB], childPath(path, 'buffer'));
         else if (isRecord(buffer) && typeof buffer[REF] === 'number') total = bufferLengths.get(buffer[REF] as number);
-        if (total === undefined) return;
+        // 缓冲必须是已知长度的 ArrayBuffer 定义：指向别的类型或未登记的 id 都不是视图
+        if (total === undefined) return shape(path);
         if (spec.type === 'DataView') {
           const byteLength = spec.byteLength;
           if (typeof byteLength !== 'number' || !Number.isSafeInteger(byteLength) || byteLength < 0) return shape(path);
@@ -190,6 +209,9 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
         if (record[RESIZABLE] === true) {
           const max = record[MAX_BYTE_LENGTH];
           if (typeof max !== 'number' || !Number.isSafeInteger(max) || max < length) return shape(path);
+        } else if (record[MAX_BYTE_LENGTH] !== undefined) {
+          // 不可调整的缓冲不接受上限字段
+          return shape(path);
         }
         return;
       }
@@ -197,6 +219,15 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
       case BLOB: {
         expectKeys(record, [BLOB, MIME, FILE, RANGE, IMAGE, ID], path);
         const length = blobLength(record[BLOB], path);
+        if (hasOwn(record, IMAGE)) {
+          const spec = record[IMAGE];
+          if (!isRecord(spec)) return shape(path);
+          const width = spec.width;
+          const height = spec.height;
+          if (typeof width !== 'number' || !Number.isSafeInteger(width) || width <= 0) return shape(path);
+          if (typeof height !== 'number' || !Number.isSafeInteger(height) || height <= 0) return shape(path);
+          if (width * height * 4 !== length) return shape(path);
+        }
         if (hasOwn(record, RANGE)) {
           // 打包块里的 data URL：偏移与长度必须落在块内
           const range = record[RANGE];
