@@ -57,8 +57,6 @@ export function ssAddr(key: string): string {
   return `ss:${escapePart(key)}`;
 }
 
-/** `ck:` 只为识别旧包保留：Cookie 已退出备份与恢复范围，本文件不再构造这种地址。 */
-
 /** 整库：结构、索引与全部记录都在这一条里 */
 export function idbAddr(database: string): string {
   return `idb:${escapePart(database)}`;
@@ -79,7 +77,12 @@ export const LEGACY_SAVE_ADDR = 'save:legacy';
 export const MOD_ORDER_ADDR = 'modlist:order';
 export const MOD_HIDDEN_ADDR = 'modlist:hidden';
 
-/** 便宜的方案判断：只切第一个冒号，不做解码 */
+/**
+ * 便宜的方案判断：只切第一个冒号，不做解码。
+ *
+ * `ck:` 只为识别旧包保留：Cookie 已退出备份与恢复范围，不再构造这种地址，
+ * 但 `schemeOf` 与 `parseAddr` 仍认它，读旧包时才能识别并跳过这些条目。
+ */
 export function schemeOf(addr: string): AddrScheme | null {
   const cut = addr.indexOf(':');
   if (cut < 0) return null;

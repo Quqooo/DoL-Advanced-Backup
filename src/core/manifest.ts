@@ -167,7 +167,7 @@ function parseIndex(raw: unknown): ManifestIndex | null {
 
 /**
  * 只做「结构 + 版本」检查，字段语义交给各分区解析器。
- * 比当前高就是「包更新」，比当前低只能是不认识的垃圾值（没有旧格式要兼容），一律按结构问题报。
+ * 比写入格式高就是「包更新」；比 `FORMAT_MIN_READ` 低、或不是整数，都是不认识的垃圾值，一律按结构问题报。
  */
 export function parseManifest(raw: unknown): ParseResult {
   if (!isRecord(raw)) return { ok: false, error: 'shape' };
