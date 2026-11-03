@@ -319,6 +319,7 @@ function createV2(resolve: BlobResolver): Decoder {
         if (isHole(item)) {
           if (!isRecord(item)) return shape(path);
           allowOnly(item, [HOLE], childPath(path, index));
+          if (item[HOLE] !== true) return shape(path);
           continue;
         }
         out[index] = decodeNode(item, childPath(path, index), depth + 1);
