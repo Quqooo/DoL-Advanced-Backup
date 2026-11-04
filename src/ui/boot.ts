@@ -1,5 +1,6 @@
 import { applyRestorePack, dropRestorePack, loadRestorePack, type RestorePack } from '../app/selfRestore';
 import type { RestoreMode } from '../core/types';
+import { holdUnload } from '../host/unload';
 import type { SelfMod } from '../host/self';
 import { tBoot } from './i18n';
 import { describeError, failureLines } from './error-text';
@@ -144,6 +145,9 @@ function openDialog(pack: RestorePack): void {
   const run = async (mode: RestoreMode): Promise<void> => {
     lock(true);
     status.textContent = strings.restorePackWorking;
+    // 恢复在写存储：这期间刷新会留下半写状态。成功路径的重载在 try 内发起，
+    // finally 先释放守卫，浏览器不会再多问一次
+    const releaseUnload = holdUnload();
     try {
       const result = await applyRestorePack(pack, mode, info => {
         status.textContent = `${strings.restorePackWorking} ${Math.round(info.ratio * 100)}%`;
@@ -164,9 +168,13 @@ function openDialog(pack: RestorePack): void {
         return;
       }
       status.textContent = strings.restorePackDone;
+      // 重载是本任务发起的：先撤守卫，别让浏览器再问一次
+      releaseUnload();
       location.reload();
     } catch (error) {
       fail(describeError(error, strings));
+    } finally {
+      releaseUnload();
     }
   };
 

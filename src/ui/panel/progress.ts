@@ -1,4 +1,5 @@
 import type { Progress } from '../../core/progress';
+import { holdUnload } from '../../host/unload';
 import { t } from '../i18n';
 import { dom } from './dom';
 
@@ -26,6 +27,7 @@ export function createProgress(): ProgressBar {
   el.append(text, track, cancel);
 
   let controller: AbortController | null = null;
+  let releaseUnload: (() => void) | null = null;
 
   cancel.addEventListener('click', () => {
     if (!controller || controller.signal.aborted) return;
@@ -45,6 +47,9 @@ export function createProgress(): ProgressBar {
     el,
     begin() {
       controller = new AbortController();
+      // 任务正在写存储：这期间刷新会留下半写状态，交给浏览器弹确认
+      releaseUnload?.();
+      releaseUnload = holdUnload();
       el.hidden = false;
       cancel.disabled = false;
       text.textContent = '';
@@ -59,6 +64,9 @@ export function createProgress(): ProgressBar {
     },
     finish() {
       controller = null;
+      // 任务结束（含被取消）就撤掉守卫：之后的重载是用户主动发起的
+      releaseUnload?.();
+      releaseUnload = null;
       el.hidden = true;
       fill.style.width = '0%';
       text.textContent = '';
