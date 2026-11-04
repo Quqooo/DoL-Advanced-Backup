@@ -66,14 +66,16 @@ export const SELF_RESTORE_WRAP_LIMIT = 120 * 1024 * 1024;
 /**
  * 安卓壳（cordova）下走 `cordova-plugin-save-dialog` 落盘的体积上限。
  *
- * 该插件的 Java 端把全部分块攒在一个 ByteArrayOutputStream 里，写盘前再 toByteArray()
- * 整包复制一份——文件多大就要多少 Java 堆（峰值约 2 倍）。超限抛的是 OutOfMemoryError
- * （Error，不是 Exception），插件的 `catch (Exception)` 接不住，回调永不 resolve：
- * 表现为 SAF 框正常、文件建成 0 字节、导出无报错地挂死。峰值约为文件 2 倍加运行时开销，
- * 而壳构建没开 largeHeap（默认堆各机型 128–512 MB 不等），取 64 MB 兼顾低端机；
- * 根治要改壳插件本身（分块直接落盘），模组侧只能风险告知后让用户自担。
+ * 插件（Gedan fork）的 Java 端把 1 MB 分块全攒进 `ByteArrayOutputStream`，`saveFile` 时
+ * 再 `toByteArray()` 复制一份，峰值约为文件的 2 倍；超限抛 `OutOfMemoryError`（Error，
+ * 不是 Exception），插件的 `catch (Exception)` 接不住，回调永不 resolve：表现为 SAF 框
+ * 正常、文件建成 0 字节、导出无报错地挂死。
+ *
+ * 壳没开 largeHeap，默认堆各机型 128–512 MB 不等。按「2F + 运行时 20–40 MB」估算，
+ * 128 MB 档的安全上限约 44 MB；取 32 MB 留出余量。超过它改走分卷导出
+ * （每卷 32 MB，峰值约 104 MB，低端机也能过）。
  */
-export const ANDROID_SAVE_LIMIT = 64 * 1024 * 1024;
+export const ANDROID_SAVE_LIMIT = 32 * 1024 * 1024;
 
 /**
  * sessionStorage 的四个键。SugarCube 的会话存储用 `Story.domId + '.'` 当前缀（DoL 里与存档库名一致），

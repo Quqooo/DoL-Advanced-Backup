@@ -111,6 +111,7 @@ export interface Strings {
   /** 安卓保存插件装不下整包时的风险告知；参数是整包与上限的 MB 数 */
   oversizeTitle: string;
   oversizeBody: (mb: number, limit: number) => string;
+  oversizeSplit: string;
   oversizeProceed: string;
   oversizeCancel: string;
   /** 阶段名 + 百分比；`label` 已含当前条目名 */
@@ -371,9 +372,10 @@ const ZH: Strings = {
   okAction: '确定',
   oversizeTitle: '导出可能失败',
   oversizeBody: (mb, limit) =>
-    `<p>包体积为 ${mb} MB，超过安卓保存插件的安全上限（约 ${limit} MB）。继续导出很可能停在 0 字节，且无法取消。</p>`
-    + '<p>更稳妥的做法：改用电脑端导出；或减少勾选的大体积项（图像库、大模组）后重试。</p>',
-  oversizeProceed: '仍要继续',
+    `<p>包体积为 ${mb} MB，超过安卓保存插件的安全上限（约 ${limit} MB）。整包导出很可能停在 0 字节，且无法取消。</p>`
+    + '<p>分卷导出会把它放进一个多卷 zip，每卷约 32 MB，逐卷保存；手动解压后即可得到原包。</p>',
+  oversizeSplit: '分卷导出',
+  oversizeProceed: '整包导出',
   oversizeCancel: '取消导出',
   progressText: (label, percent) => (label ? `${label} ${percent}%` : `${percent}%`),
   phaseText: phase =>
@@ -575,6 +577,10 @@ const ZH: Strings = {
     dbReadFailed: name => `数据库 ${name} 的一致性读取失败`,
     dbSchemaMismatch: name => `数据库 ${name} 的仓库结构不兼容，未清空数据`,
     blobInvalid: () => '数据块引用或范围无效',
+    // 分卷导出：外层多卷 zip 的边界
+    splitPartSize: () => '分卷大小无效',
+    splitTooLarge: () => '包超过 4 GiB，暂不支持分卷',
+    splitTooManyParts: count => `需要分成 ${count} 卷，超过 99 卷上限`,
     // 值编解码：错误都带路径，出错时能定位到具体记录
     unsupportedValue: (type, path) => `${type} 无法无损备份：${path}`,
     valueTagUnknown: (tag, path) => `未知的值标记 ${tag}：${path}`,
@@ -733,9 +739,10 @@ const EN: Strings = {
   okAction: 'OK',
   oversizeTitle: 'Export may fail',
   oversizeBody: (mb, limit) =>
-    `<p>The package is ${mb} MB. The Android save plugin handles about ${limit} MB. The export can stop at 0 bytes, and you cannot cancel it.</p>`
-    + '<p>Export from a desktop browser instead. Or clear the large items (image packs, large mods) and try again.</p>',
-  oversizeProceed: 'Export Anyway',
+    `<p>The package is ${mb} MB. The Android save plugin handles about ${limit} MB. A single-file export can stop at 0 bytes, and you cannot cancel it.</p>`
+    + '<p>Split export puts it in a multi-volume zip of about 32 MB per part. Save each part, then extract them manually to get the original package.</p>',
+  oversizeSplit: 'Split Export',
+  oversizeProceed: 'Export as One File',
   oversizeCancel: 'Cancel Export',
   progressText: (label, percent) => (label ? `${label} ${percent}%` : `${percent}%`),
   phaseText: phase =>
@@ -937,6 +944,10 @@ const EN: Strings = {
     dbReadFailed: name => `Consistent read failed for database ${name}`,
     dbSchemaMismatch: name => `Incompatible stores in database ${name}; no data cleared`,
     blobInvalid: () => 'Invalid data block reference or range',
+    // Split export: limits of the outer multi-volume zip
+    splitPartSize: () => 'Invalid split size',
+    splitTooLarge: () => 'The pack exceeds 4 GiB; split export is not supported',
+    splitTooManyParts: count => `Splitting into ${count} parts exceeds the 99-part limit`,
     // Value codec: every error carries a path so the failing record can be located
     unsupportedValue: (type, path) => `${type} cannot be backed up losslessly: ${path}`,
     valueTagUnknown: (tag, path) => `Unknown value tag ${tag}: ${path}`,

@@ -1,8 +1,13 @@
 import { ANDROID_SAVE_LIMIT } from '../core/constants';
+import { createCrc32 } from '../core/crc32';
 import { abortError, messageError } from '../core/error';
 import { createBlobSink, type ByteSink } from '../core/sink';
+import { splitPackage } from '../core/split';
 import { t } from '../ui/i18n';
-import { confirmDialog } from './dialog';
+import { chooseDialog } from './dialog';
+
+/** 分卷大小：与安卓上限同值，单卷峰值约 104 MB */
+const SPLIT_PART_SIZE = 32 * 1024 * 1024;
 
 export type SaveMethod = 'cordova' | 'picker' | 'download';
 
@@ -21,18 +26,35 @@ function cordovaSave(): ((blob: Blob, filename: string) => unknown) | null {
 
 /**
  * 安卓壳的保存插件把整份文件攒在 Java 堆里（见 constants.ts 的 ANDROID_SAVE_LIMIT），
- * 超限不会报错而是无提示挂死。此时压缩已经完成，只问一句：风险告知后继续，还是就此打住。
- * 取消走 AbortError，调用方按「已取消」处理，不当作失败。
+ * 超限不会报错而是无提示挂死。此时压缩已经完成，给三个选择：分卷、整包、取消。
  */
-async function confirmOversize(blob: Blob): Promise<boolean> {
-  if (blob.size <= ANDROID_SAVE_LIMIT) return true;
+type OversizeChoice = 'split' | 'whole' | 'cancel';
+
+async function askOversize(blob: Blob): Promise<OversizeChoice> {
+  if (blob.size <= ANDROID_SAVE_LIMIT) return 'whole';
   const mb = (value: number) => Math.round(value / 1024 / 1024);
-  return confirmDialog({
+  const answer = await chooseDialog({
     title: t().oversizeTitle,
     body: t().oversizeBody(mb(blob.size), mb(ANDROID_SAVE_LIMIT)),
-    okLabel: t().oversizeProceed,
+    choices: [
+      { value: 'split', label: t().oversizeSplit },
+      { value: 'whole', label: t().oversizeProceed },
+    ],
     cancelLabel: t().oversizeCancel,
   });
+  return answer === 'split' || answer === 'whole' ? answer : 'cancel';
+}
+
+/** 外层 zip 条目的 CRC：分卷前读一遍整包，分块累计，不额外占整包内存 */
+async function crcOfBlob(blob: Blob): Promise<number> {
+  const crc = createCrc32();
+  const reader = blob.stream().getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    crc.update(value);
+  }
+  return crc.digest();
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {
@@ -127,9 +149,16 @@ export async function openSink(nameHint: string): Promise<SaveSink> {
   const native = cordovaSave();
   if (native) {
     const deliver = async (blob: Blob, filename?: string) => {
-      // SAF 对话框在写的时候才弹，压缩已完成：超限先弹风险确认，取消则按 abort 收场
-      if (!(await confirmOversize(blob))) throw abortError();
-      await native(blob, filename ?? nameHint);
+      // SAF 对话框在写的时候才弹，压缩已完成：超限时先让用户选分卷还是整包
+      const name = filename ?? nameHint;
+      const choice = await askOversize(blob);
+      if (choice === 'cancel') throw abortError();
+      if (choice === 'split') {
+        const parts = splitPackage(blob, name, await crcOfBlob(blob), SPLIT_PART_SIZE);
+        for (const part of parts) await native(part.blob, part.name);
+        return;
+      }
+      await native(blob, name);
     };
     return {
       method: 'cordova',
