@@ -17,8 +17,9 @@ import {
 } from './app/snapshots';
 import { list as mappingList, register as registerMapping } from './core/mapping';
 import type { RestoreMode } from './core/types';
-import { isRestorePack, selfMod, selfProbe } from './host/self';
+import { onModLoaderLoadEnd } from './host/modloader';
 import { installTab, openPanel } from './host/overlay';
+import { isRestorePack, selfMod, selfProbe } from './host/self';
 import { runRestorePack } from './ui/boot';
 import { failureLines } from './ui/error-text';
 import { invalidateLang, setLangPref } from './ui/i18n';
@@ -94,13 +95,28 @@ if (isRestorePack(self)) {
   };
 
   installTab(renderPanel, refreshOnEnter);
+
+  /**
+   * 重载后的空库清理只跑一次。
+   *
+   * 首选加载器的 `ModLoaderLoadEnd`：它在所有脚本执行完之后、游戏启动之前触发，
+   * 已加载列表此时是完整的，游戏也还没打开这些库。老版本没有这个接口，
+   * 由 `:storyready` 补上——那时 `idb.init` 已跑过，库名与写入侧一致。
+   */
+  let pendingDropDone = false;
+  const dropPendingOnce = (): void => {
+    if (pendingDropDone) return;
+    pendingDropDone = true;
+    void dropPendingEmptyDbs();
+  };
+  onModLoaderLoadEnd('AdvancedBackup:pendingDrop', dropPendingOnce);
+
   // 剧情就绪后正文才有足够文本可判定语言，重新探一次再补分页
   window.jQuery?.(document).on(':storyready', () => {
     invalidateLang();
     installTab(renderPanel, refreshOnEnter);
-    // 模组要全部加载完才拿得到完整的已加载列表：主脚本的 Load 阶段还会把后面的模组
-    // 当成「已卸载」，那时删库会删掉它们马上要用的库
-    void dropPendingEmptyDbs();
+    // 没有加载结束回调时这里是唯一时机；有回调时上一次已经清完，标记为空
+    dropPendingOnce();
     // 正本运行时，自恢复包不应在游戏启动前弹窗：装入后立即移除，改由「恢复」分页处理
     startPackWatch(packs => void notifyStoredPacks(packs));
   });

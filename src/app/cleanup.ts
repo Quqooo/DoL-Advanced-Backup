@@ -10,7 +10,8 @@ import { useGameDb } from '../store/saves';
  * 真正删掉干净恢复留下的空库。
  *
  * 干净恢复只清空记录、不删库：`deleteDatabase` 被页面里别的连接占着时会卡在 `onblocked`，
- * 之后任何 `open` 都排在它后面。重载后页面是干净的，才轮到这里动手。
+ * 之后任何 `open` 都排在它后面。重载后页面是干净的，才轮到这里动手：首选加载器的
+ * `ModLoaderLoadEnd`（游戏尚未启动），老版本没有这个接口时由 `:storyready` 触发。
  *
  * 四条判据缺一不可：
  * - 库名必须被映射表命中，否则「这是谁的东西」无从判断，宁可留着；
@@ -26,7 +27,8 @@ import { useGameDb } from '../store/saves';
 export async function dropPendingEmptyDbs(): Promise<void> {
   const pending = readPendingDrop();
   if (pending.length === 0) return;
-  // `:storyready` 之后 `idb.init` 已经跑过：库名取宿主当前值，保护名单与写入侧必须是同一个名字
+  // 库名取宿主当前值：`idb.init` 尚未跑时 `dbName()` 退回默认名，而游戏库本来就不会进标记，
+  // 保护名单与写入侧在两种时机下都指向同一个名字
   useGameDb(dbName());
   try {
     const loaded = loadedModNames();

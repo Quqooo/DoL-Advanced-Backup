@@ -21,6 +21,27 @@ async function call<T>(name: string, ...args: unknown[]): Promise<T | null> {
   }
 }
 
+/**
+ * 注册加载器的「全部模组加载完」回调，返回是否注册成功。
+ *
+ * 这个时机在 SugarCube 启动之前：脚本全部执行完，游戏还没打开任何库，适合做重载后的收尾。
+ * 老版本没有 `addLifeTimeCircleHook`，调用方据此退回 `:storyready`。
+ * 回调只负责触发，不等清理结束，避免拖住启动。
+ */
+export function onModLoaderLoadEnd(id: string, run: () => void): boolean {
+  const apis = [controller(), (window as any).modUtils?.getModLoadController?.()];
+  for (const api of apis) {
+    if (typeof api?.addLifeTimeCircleHook !== 'function') continue;
+    try {
+      api.addLifeTimeCircleHook(id, { ModLoaderLoadEnd: () => { run(); } });
+      return true;
+    } catch (error) {
+      console.warn(`[AdvancedBackup] 注册加载结束回调 ${id} 失败`, error);
+    }
+  }
+  return false;
+}
+
 export async function addMod(name: string, value: ModValue): Promise<boolean> {
   return (await call('addModIndexDB', name, value)) !== null;
 }
