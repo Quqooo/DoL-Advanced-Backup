@@ -39,6 +39,7 @@ import {
   isRecord,
   presentIndices,
   quadPoints,
+  regExpLastIndex,
   shapeOf,
   tagOf,
   unsupported,
@@ -58,17 +59,17 @@ function isThenable(value: Encoded): value is Promise<unknown> {
   return typeof (value as { then?: unknown } | null)?.then === 'function';
 }
 
-/**
- * 规范 base64 的判据。
- *
- * 长度是 4 的倍数、字符只来自标准字母表、补位只在末尾且不超过两位——这三点成立时，
- * 解码再编码一定得到原串，所以不必真的编一遍再比对。图片类存档里 data URL 动辄几十 MB，
- * 那次多余的编码是导出阶段最大的一笔开销。
- */
-const CANONICAL_BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+/** 检查标准字母表、补位位置与未使用尾位，避免解码再编码整段图片。 */
+const CANONICAL_BASE64 = /^[A-Za-z0-9+/]*={0,2}(?![\s\S])/;
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
 function isCanonicalBase64(text: string): boolean {
-  return text.length % 4 === 0 && CANONICAL_BASE64.test(text);
+  if (text.length % 4 !== 0 || !CANONICAL_BASE64.test(text)) return false;
+  if (!text.endsWith('=')) return true;
+  const padding = text.endsWith('==') ? 2 : 1;
+  const last = BASE64_ALPHABET.indexOf(text[text.length - padding - 1]);
+  // 一个补位要求低 2 位为零，两个补位要求低 4 位为零。
+  return (last & (padding === 1 ? 3 : 15)) === 0;
 }
 
 /** `data:<mime>;base64,<payload>` → 字节；只有规范写法才能改写成数据块 */
@@ -241,7 +242,7 @@ function encodeNode(value: unknown, blobs: BlobTable, ctx: Context, path: string
     }
     case 'regexp': {
       const regexp = value as RegExp;
-      return withId({ [RE]: { source: regexp.source, flags: regexp.flags, lastIndex: regexp.lastIndex } }, id);
+      return withId({ [RE]: { source: regexp.source, flags: regexp.flags, lastIndex: regExpLastIndex(regexp, path) } }, id);
     }
     case 'buffer': {
       const buffer = value as ArrayBuffer;

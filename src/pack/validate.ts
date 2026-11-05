@@ -4,11 +4,13 @@ import {
   BIGINT,
   BLOB,
   BOXED,
+  BOXED_TYPES,
   BUFFER,
   DATE,
   DOM,
   DOMERROR,
   ERROR,
+  ERROR_TYPES,
   FILE,
   GEOMETRY_TAGS,
   HOLE,
@@ -38,16 +40,15 @@ import {
   type BlobResolver,
 } from './graph';
 
-/**
- * 只校验结构，不构造解码结果：标记、引用、id、数据块、视图范围、深度与节点数。
- *
- * 写入前的预检用它，避免为了验证而在内存里再建一份整库对象图。类型字段的细节
- * （例如日期能否解析）留给真正的解码器：预检通过后写入阶段仍会解码，那一步失败
- * 只影响该分类，镜像也会跳过它。
- */
+interface Checked {
+  type: string;
+  length?: number;
+  number?: number;
+}
+
+/** 写入前核对解码判据；只保留引用类型和缓冲长度，不复制二进制或构造完整对象图。 */
 export function validateEncoded(value: unknown, resolve: BlobResolver, basePath = ''): void {
-  const defs = new Set<number>();
-  const bufferLengths = new Map<number, number>();
+  const defs = new Map<number, Checked>();
   let nodes = 0;
 
   const shape = (path: string): never => {
@@ -60,10 +61,12 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
     return raw;
   };
 
-  const register = (id: number | undefined, path: string): void => {
-    if (id === undefined) return;
-    if (defs.has(id)) throw messageError('valueIdDuplicate', id, path);
-    defs.add(id);
+  const register = (id: number | undefined, value: Checked, path: string): Checked => {
+    if (id !== undefined) {
+      if (defs.has(id)) throw messageError('valueIdDuplicate', id, path);
+      defs.set(id, value);
+    }
+    return value;
   };
 
   const expectKeys = (record: Record<string, unknown>, allowed: readonly string[], path: string): void => {
@@ -80,80 +83,91 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
     return bytes.length;
   };
 
-  const walk = (node: unknown, path: string, depth: number): void => {
-    if (node === null || typeof node !== 'object') return;
+  const constructorOf = (name: string, path: string): Function => {
+    const ctor = (globalThis as Record<string, unknown>)[name];
+    if (typeof ctor !== 'function') return shape(path);
+    return ctor;
+  };
+
+  const arrayItems = (items: unknown[], path: string, depth: number): void => {
+    for (const [index, item] of items.entries()) {
+      const at = childPath(path, index);
+      if (isRecord(item) && hasOwn(item, HOLE)) {
+        expectKeys(item, [HOLE], at);
+        if (item[HOLE] !== true) return shape(at);
+      } else {
+        walk(item, at, depth + 1);
+      }
+    }
+  };
+
+  const walk = (node: unknown, path: string, depth: number): Checked => {
+    if (node === null || typeof node !== 'object') {
+      return { type: typeof node, number: typeof node === 'number' ? node : undefined };
+    }
     if (++nodes > MAX_NODES) throw messageError('valueNodeLimit', path);
     if (depth > MAX_DEPTH) throw messageError('valueDepthExceeded', path);
 
     if (Array.isArray(node)) {
-      for (const [index, item] of node.entries()) {
-        if (isRecord(item) && hasOwn(item, HOLE)) {
-          expectKeys(item, [HOLE], childPath(path, index));
-          if (item[HOLE] !== true) return shape(childPath(path, index));
-          continue;
-        }
-        walk(item, childPath(path, index), depth + 1);
-      }
-      return;
+      arrayItems(node, path, depth);
+      return { type: 'Array' };
     }
 
     const record = node as Record<string, unknown>;
+    const firstMarker = Object.keys(record).find(key => key.startsWith(PREFIX) && key !== ID);
+    if (firstMarker === HOLE) return shape(path);
     if (hasOwn(record, OBJ)) {
       expectKeys(record, [OBJ, ID], path);
       const inner = record[OBJ];
       if (!isRecord(inner)) return shape(path);
-      register(readId(record[ID], path), path);
+      const out = register(readId(record[ID], path), { type: 'Object' }, path);
       for (const [key, item] of Object.entries(inner)) walk(item, childPath(path, key), depth + 1);
-      return;
+      return out;
     }
 
     if (hasOwn(record, REF)) {
-      expectKeys(record, [REF], path);
       const target = record[REF];
-      if (typeof target !== 'number' || !Number.isSafeInteger(target) || target < 0) {
+      if (Object.keys(record).length !== 1 || typeof target !== 'number' || !Number.isSafeInteger(target) || target < 0) {
         throw messageError('valueRefInvalid', String(target), path);
       }
-      if (!defs.has(target)) throw messageError('valueRefUnknown', target, path);
-      return;
+      const known = defs.get(target);
+      if (!known) throw messageError('valueRefUnknown', target, path);
+      return known;
     }
 
-    const marker = Object.keys(record).find(key => key.startsWith(PREFIX) && key !== ID);
+    // 与解码器使用同一分支顺序，不能由 JSON 键顺序决定组合标记的含义。
+    const marker = [MAP, SET, ARR, SPARSE, VIEW, BUFFER, IMAGE, FILE, BLOB, ERROR,
+      DOMERROR, DOM, BOXED, NUM, BIGINT, UNDEF, DATE, RE].find(key => hasOwn(record, key)) ?? firstMarker;
     const id = readId(record[ID], path);
-    register(id, path);
 
     switch (marker) {
       case MAP: {
         expectKeys(record, [MAP, ID], path);
         const pairs = record[MAP];
         if (!Array.isArray(pairs)) return shape(path);
+        const out = register(id, { type: 'Map' }, path);
         for (const [index, pair] of pairs.entries()) {
           if (!Array.isArray(pair) || pair.length !== 2) return shape(path);
-          walk(pair[0], childPath(path, index), depth + 1);
+          walk(pair[0], childPath(childPath(path, index), 'key'), depth + 1);
           walk(pair[1], childPath(path, index), depth + 1);
         }
-        return;
+        return out;
       }
       case SET: {
         expectKeys(record, [SET, ID], path);
         const items = record[SET];
         if (!Array.isArray(items)) return shape(path);
-        // Set 没有空洞：这里不能按数组元素跳过低洞标记
+        const out = register(id, { type: 'Set' }, path);
         for (const [index, item] of items.entries()) walk(item, childPath(path, index), depth + 1);
-        return;
+        return out;
       }
       case ARR: {
         expectKeys(record, [ARR, ID], path);
         const items = record[ARR];
         if (!Array.isArray(items)) return shape(path);
-        for (const [index, item] of items.entries()) {
-          if (isRecord(item) && hasOwn(item, HOLE)) {
-            expectKeys(item, [HOLE], childPath(path, index));
-            if (item[HOLE] !== true) return shape(childPath(path, index));
-            continue;
-          }
-          walk(item, childPath(path, index), depth + 1);
-        }
-        return;
+        const out = register(id, { type: 'Array' }, path);
+        arrayItems(items, path, depth);
+        return out;
       }
       case SPARSE: {
         expectKeys(record, [SPARSE, ID], path);
@@ -163,126 +177,210 @@ export function validateEncoded(value: unknown, resolve: BlobResolver, basePath 
         if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0 || length > MAX_SPARSE_LENGTH) {
           return shape(path);
         }
+        const out = register(id, { type: 'Array' }, path);
         let previous = -1;
         for (const pair of spec.items) {
           if (!Array.isArray(pair) || pair.length !== 2) return shape(path);
           const index = pair[0];
-          if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0 || index >= length) return shape(path);
-          if (index <= previous) return shape(path);
+          if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0 || index >= length || index <= previous) {
+            return shape(path);
+          }
           previous = index;
           walk(pair[1], childPath(path, index), depth + 1);
         }
-        return;
+        return out;
       }
       case VIEW: {
         expectKeys(record, [VIEW, ID], path);
         const spec = record[VIEW];
         if (!isRecord(spec) || typeof spec.type !== 'string' || !VIEW_TYPES.has(spec.type)) return shape(path);
+        const buffer = walk(spec.buffer, childPath(path, 'buffer'), depth + 1);
+        if (buffer.type !== 'ArrayBuffer' || buffer.length === undefined) return shape(path);
         const offset = spec.byteOffset;
         if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) return shape(path);
-        const buffer = spec.buffer;
-        walk(buffer, childPath(path, 'buffer'), depth + 1);
-        let total: number | undefined;
-        if (isRecord(buffer) && buffer[BUFFER] === true) total = blobLength(buffer[BLOB], childPath(path, 'buffer'));
-        else if (isRecord(buffer) && typeof buffer[REF] === 'number') total = bufferLengths.get(buffer[REF] as number);
-        // 缓冲必须是已知长度的 ArrayBuffer 定义：指向别的类型或未登记的 id 都不是视图
-        if (total === undefined) return shape(path);
+        const ctor = constructorOf(spec.type, path);
         if (spec.type === 'DataView') {
           const byteLength = spec.byteLength;
           if (typeof byteLength !== 'number' || !Number.isSafeInteger(byteLength) || byteLength < 0) return shape(path);
-          if (offset + byteLength > total) throw messageError('valueRangeInvalid', path);
-          return;
+          if (offset + byteLength > buffer.length) throw messageError('valueRangeInvalid', path);
+        } else {
+          const length = spec.length;
+          if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) return shape(path);
+          const element = (ctor as { BYTES_PER_ELEMENT?: number }).BYTES_PER_ELEMENT ?? 1;
+          if (element <= 0 || offset % element !== 0 || offset + length * element > buffer.length) {
+            throw messageError('valueRangeInvalid', path);
+          }
         }
-        const length = spec.length;
-        if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) return shape(path);
-        const ctor = (globalThis as Record<string, unknown>)[spec.type] as { BYTES_PER_ELEMENT?: number } | undefined;
-        const element = ctor?.BYTES_PER_ELEMENT ?? 1;
-        if (element <= 0 || offset % element !== 0 || offset + length * element > total) {
-          throw messageError('valueRangeInvalid', path);
-        }
-        return;
+        return register(id, { type: spec.type }, path);
       }
       case BUFFER: {
         expectKeys(record, [BUFFER, BLOB, RESIZABLE, MAX_BYTE_LENGTH, ID], path);
+        if (record[BUFFER] !== true) return shape(path);
         const length = blobLength(record[BLOB], path);
-        if (id !== undefined) bufferLengths.set(id, length);
         if (record[RESIZABLE] === true) {
           const max = record[MAX_BYTE_LENGTH];
           if (typeof max !== 'number' || !Number.isSafeInteger(max) || max < length) return shape(path);
+          try {
+            // 零长度探测平台是否接受上限，不分配包内缓冲。
+            const Resizable = ArrayBuffer as unknown as new (length: number, options: { maxByteLength: number }) => ArrayBuffer;
+            new Resizable(0, { maxByteLength: max });
+          } catch {
+            return shape(path);
+          }
         } else if (record[MAX_BYTE_LENGTH] !== undefined) {
-          // 不可调整的缓冲不接受上限字段
           return shape(path);
         }
-        return;
+        return register(id, { type: 'ArrayBuffer', length }, path);
       }
-      case IMAGE:
-      case BLOB: {
-        expectKeys(record, [BLOB, MIME, FILE, RANGE, IMAGE, ID], path);
-        const length = blobLength(record[BLOB], path);
-        if (hasOwn(record, IMAGE)) {
-          const spec = record[IMAGE];
-          if (!isRecord(spec)) return shape(path);
-          const width = spec.width;
-          const height = spec.height;
-          if (typeof width !== 'number' || !Number.isSafeInteger(width) || width <= 0) return shape(path);
-          if (typeof height !== 'number' || !Number.isSafeInteger(height) || height <= 0) return shape(path);
-          if (width * height * 4 !== length) return shape(path);
+      case IMAGE: {
+        expectKeys(record, [IMAGE, BLOB, ID], path);
+        const spec = record[IMAGE];
+        if (!isRecord(spec)) return shape(path);
+        const width = spec.width;
+        const height = spec.height;
+        if (typeof width !== 'number' || !Number.isSafeInteger(width) || width <= 0) return shape(path);
+        if (typeof height !== 'number' || !Number.isSafeInteger(height) || height <= 0) return shape(path);
+        if (width * height * 4 !== blobLength(record[BLOB], path)) return shape(path);
+        constructorOf('ImageData', path);
+        if (spec.colorSpace !== undefined) {
+          if (typeof spec.colorSpace !== 'string') return shape(path);
+          try {
+            // 仅构造一个像素以验证平台选项，不复制原图。
+            new ImageData(new Uint8ClampedArray(4), 1, 1, { colorSpace: spec.colorSpace as ImageDataSettings['colorSpace'] });
+          } catch {
+            return shape(path);
+          }
         }
+        return register(id, { type: 'ImageData' }, path);
+      }
+      case FILE:
+      case BLOB: {
+        expectKeys(record, [BLOB, MIME, FILE, RANGE, ID], path);
+        if (record[MIME] !== undefined && typeof record[MIME] !== 'string') return shape(path);
+        const length = blobLength(record[BLOB], path);
         if (hasOwn(record, RANGE)) {
-          // 打包块里的 data URL：偏移与长度必须落在块内
           const range = record[RANGE];
-          if (!Array.isArray(range) || range.length !== 2) throw messageError('blobInvalid');
+          if (!Array.isArray(range) || range.length !== 2) return shape(path);
           const [offset, size] = range;
           if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0
-            || typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0
-            || offset > length || size > length - offset) throw messageError('blobInvalid');
+            || typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0) return shape(path);
+          if (offset > length || size > length - offset) throw messageError('valueRangeInvalid', path);
+          if (hasOwn(record, FILE) || id !== undefined) return shape(path);
+          return { type: 'string' };
         }
-        return;
+        if (hasOwn(record, FILE)) {
+          const spec = record[FILE];
+          if (!isRecord(spec) || typeof spec.name !== 'string'
+            || typeof spec.lastModified !== 'number' || !Number.isFinite(spec.lastModified)) return shape(path);
+          constructorOf('File', path);
+          return register(id, { type: 'File' }, path);
+        }
+        constructorOf('Blob', path);
+        return register(id, { type: 'Blob' }, path);
       }
       case ERROR: {
         expectKeys(record, [ERROR, ID], path);
         const spec = record[ERROR];
         if (!isRecord(spec)) return shape(path);
+        const name = typeof spec.type === 'string' ? spec.type : 'Error';
+        constructorOf(ERROR_TYPES.has(name) ? name : 'Error', path);
+        if (spec.message !== undefined && typeof spec.message !== 'string') return shape(path);
+        if (spec.stack !== undefined && spec.stack !== null && typeof spec.stack !== 'string') return shape(path);
+        const out = register(id, { type: 'Error' }, path);
         if (hasOwn(spec, 'cause')) walk(spec.cause, childPath(path, 'cause'), depth + 1);
-        return;
+        return out;
+      }
+      case DOMERROR: {
+        expectKeys(record, [DOMERROR, ID], path);
+        const spec = record[DOMERROR];
+        if (!isRecord(spec) || typeof spec.name !== 'string' || typeof spec.message !== 'string') return shape(path);
+        constructorOf('DOMException', path);
+        return register(id, { type: 'DOMException' }, path);
       }
       case DOM: {
         expectKeys(record, [DOM, ID], path);
         const spec = record[DOM];
         if (!isRecord(spec) || typeof spec.type !== 'string' || !GEOMETRY_TAGS.has(spec.type)) return shape(path);
+        const ctor = constructorOf(spec.type, path);
         if (spec.type === 'DOMQuad') {
           if (!Array.isArray(spec.p) || spec.p.length !== 4) return shape(path);
-          for (const [index, point] of spec.p.entries()) walk(point, childPath(path, index), depth + 1);
-          return;
+          for (const [index, point] of spec.p.entries()) {
+            if (walk(point, childPath(path, index), depth + 1).type !== 'DOMPoint') return shape(path);
+          }
+        } else {
+          const matrix = spec.type === 'DOMMatrix' || spec.type === 'DOMMatrixReadOnly';
+          const list = matrix ? spec.m : spec.v;
+          if (!Array.isArray(list) || (matrix ? list.length !== 6 && list.length !== 16 : list.length !== 4)) return shape(path);
+          const values: number[] = [];
+          for (const item of list) {
+            const part = walk(item, childPath(path, matrix ? 'm' : 'v'), depth + 1);
+            if (part.type !== 'number') return shape(path);
+            values.push(part.number as number);
+          }
+          if (matrix) {
+            if (typeof spec.is2D !== 'boolean') return shape(path);
+            const built = new (ctor as new (values: number[]) => DOMMatrix)(values);
+            if (built.is2D !== spec.is2D) return shape(path);
+          }
         }
-        const list = spec.type === 'DOMMatrix' || spec.type === 'DOMMatrixReadOnly' ? spec.m : spec.v;
-        if (!Array.isArray(list)) return shape(path);
-        for (const [index, item] of list.entries()) walk(item, childPath(path, index), depth + 1);
-        return;
+        return register(id, { type: spec.type }, path);
       }
       case BOXED: {
         expectKeys(record, [BOXED, ID], path);
         const spec = record[BOXED];
-        if (!isRecord(spec)) return shape(path);
-        walk(spec.value, childPath(path, 'value'), depth + 1);
-        return;
+        if (!isRecord(spec) || typeof spec.type !== 'string' || !BOXED_TYPES.has(spec.type)) return shape(path);
+        if (spec.type === 'Number') {
+          if (walk(spec.value, childPath(path, 'value'), depth + 1).type !== 'number') return shape(path);
+        } else if (spec.type === 'String') {
+          if (typeof spec.value !== 'string') return shape(path);
+        } else if (spec.type === 'Boolean') {
+          if (typeof spec.value !== 'boolean') return shape(path);
+        } else if (typeof spec.value !== 'string' || !/^-?\d+$/.test(spec.value)) {
+          return shape(path);
+        }
+        return register(id, { type: spec.type }, path);
       }
-      case NUM:
+      case NUM: {
+        expectKeys(record, [NUM], path);
+        const text = record[NUM];
+        if (typeof text !== 'string' || !['NaN', 'Infinity', '-Infinity', '-0'].includes(text)) return shape(path);
+        return { type: 'number', number: Number(text) };
+      }
       case BIGINT:
+        expectKeys(record, [BIGINT], path);
+        if (typeof record[BIGINT] !== 'string' || !/^-?\d+$/.test(record[BIGINT] as string)) return shape(path);
+        return { type: 'bigint' };
       case UNDEF:
-      case DOMERROR:
-        expectKeys(record, [marker], path);
-        return;
-      case DATE:
-      case RE:
-        expectKeys(record, [marker, ID], path);
-        return;
+        expectKeys(record, [UNDEF], path);
+        if (record[UNDEF] !== true) return shape(path);
+        return { type: 'undefined' };
+      case DATE: {
+        expectKeys(record, [DATE, ID], path);
+        const text = record[DATE];
+        if (typeof text !== 'string' || (text !== 'invalid' && Number.isNaN(Date.parse(text)))) return shape(path);
+        return register(id, { type: 'Date' }, path);
+      }
+      case RE: {
+        expectKeys(record, [RE, ID], path);
+        const spec = record[RE];
+        if (!isRecord(spec) || typeof spec.source !== 'string' || typeof spec.flags !== 'string') return shape(path);
+        if (spec.lastIndex !== undefined && (typeof spec.lastIndex !== 'number' || !Number.isSafeInteger(spec.lastIndex) || spec.lastIndex < 0)) {
+          return shape(path);
+        }
+        try {
+          new RegExp(spec.source, spec.flags);
+        } catch {
+          return shape(path);
+        }
+        return register(id, { type: 'RegExp' }, path);
+      }
       default: {
         if (marker !== undefined) throw messageError('valueTagUnknown', marker, path);
+        const out = register(id, { type: 'Object' }, path);
         for (const key of Object.keys(record)) {
-          if (key === ID) continue;
-          walk(record[key], childPath(path, key), depth + 1);
+          if (key !== ID) walk(record[key], childPath(path, key), depth + 1);
         }
+        return out;
       }
     }
   };

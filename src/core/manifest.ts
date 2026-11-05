@@ -1,3 +1,5 @@
+import { isRecord } from './guards';
+
 export const MANIFEST_APP = 'AdvancedBackup';
 
 /**
@@ -125,10 +127,6 @@ export interface Manifest {
 export type ManifestError = 'app' | 'format' | 'newer' | 'shape';
 
 export type ParseResult = { ok: true; manifest: Manifest } | { ok: false; error: ManifestError };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 /** CRC32 一律 8 位小写十六进制；导出侧统一格式，读端只做字符串比较 */
 function isCrc32(value: unknown): value is string {

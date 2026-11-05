@@ -1,4 +1,7 @@
 import { messageError } from '../core/error';
+import { hasOwn, isRecord } from '../core/guards';
+
+export { hasOwn, isRecord } from '../core/guards';
 
 /**
  * 图编码的标记与共用判定。
@@ -106,7 +109,7 @@ export const ERROR_TYPES: ReadonlySet<string> = new Set([
 
 export const BOXED_TYPES: ReadonlySet<string> = new Set(['Number', 'String', 'Boolean', 'BigInt']);
 
-/** 视图构造器白名单：伪造的类型不能拿任意名字调 `globalThis` */
+/** 允许的视图构造器：伪造的类型不能拿任意名字调 `globalThis` */
 export const VIEW_TYPES: ReadonlySet<string> = new Set([
   'Int8Array',
   'Uint8Array',
@@ -122,14 +125,6 @@ export const VIEW_TYPES: ReadonlySet<string> = new Set([
   'DataView',
 ]);
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-export function hasOwn(record: object, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
-}
-
 /** 标记键只认自有属性：原型链上的同名键不算 */
 export function markerOf(record: Record<string, unknown>): string | null {
   for (const key of Object.keys(record)) {
@@ -144,6 +139,15 @@ export function unsupported(type: string, path: string): never {
 
 export function childPath(path: string, key: string | number): string {
   return typeof key === 'number' ? `${path}[${key}]` : `${path}/${key}`;
+}
+
+/** format 2 只保存非负安全整数；用 unsupportedValue 接入快照跳过机制。 */
+export function regExpLastIndex(value: RegExp, path: string): number {
+  const lastIndex: unknown = value.lastIndex;
+  if (typeof lastIndex !== 'number' || !Number.isSafeInteger(lastIndex) || lastIndex < 0) {
+    return unsupported('RegExp.lastIndex', childPath(path, 'lastIndex'));
+  }
+  return lastIndex;
 }
 
 /**
@@ -247,6 +251,9 @@ export function countRefs(root: unknown, basePath = ''): WeakMap<object, number>
     if (shape.kind === 'unsupported') unsupported(shape.type, path);
 
     switch (shape.kind) {
+      case 'regexp':
+        regExpLastIndex(object as RegExp, path);
+        return;
       case 'array': {
         for (const index of presentIndices(object as readonly unknown[])) {
           child((object as readonly unknown[])[index], childPath(path, index), depth);
@@ -326,7 +333,7 @@ export function fieldOfEncoded(value: unknown, key: string): unknown {
   if (!isRecord(value)) return undefined;
   if (hasOwn(value, OBJ)) {
     const inner = value[OBJ];
-    return isRecord(inner) ? inner[key] : undefined;
+    return isRecord(inner) && hasOwn(inner, key) ? inner[key] : undefined;
   }
-  return value[key];
+  return hasOwn(value, key) ? value[key] : undefined;
 }

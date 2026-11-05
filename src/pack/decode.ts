@@ -536,9 +536,9 @@ function createV2(resolve: BlobResolver): Decoder {
         if (decoded.some(point => typeof point !== 'object' || point === null || tagOf(point) !== 'DOMPoint')) return shape(path);
         built = new (ctor as new (...points: unknown[]) => unknown)(...decoded);
       } else {
-        if (!Array.isArray(spec.v) && !Array.isArray(spec.m)) return shape(path);
         if (spec.type === 'DOMMatrix' || spec.type === 'DOMMatrixReadOnly') {
-          const raw = spec.m as unknown[];
+          const raw = spec.m;
+          if (!Array.isArray(raw)) return shape(path);
           if (raw.length !== 6 && raw.length !== 16) return shape(path);
           const values = readNumbers(raw, raw.length, childPath(path, 'm'));
           if (!values) return shape(path);
@@ -547,7 +547,8 @@ function createV2(resolve: BlobResolver): Decoder {
           if (matrix.is2D !== spec.is2D) return shape(path);
           built = matrix;
         } else {
-          const raw = spec.v as unknown[];
+          const raw = spec.v;
+          if (!Array.isArray(raw)) return shape(path);
           const values = readNumbers(raw, 4, childPath(path, 'v'));
           if (!values) return shape(path);
           built = new (ctor as new (...values: number[]) => unknown)(...values);
