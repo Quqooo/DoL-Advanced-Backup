@@ -1,4 +1,4 @@
-import { base64ToBytes, bytesToBase64 } from '../core/format';
+import { base64ToBytes } from '../core/format';
 import { messageError } from '../core/error';
 import { BlobTable } from './blob';
 import {
@@ -30,6 +30,7 @@ import {
   RE,
   SET,
   SPARSE,
+  SPARSE_MIN_LENGTH,
   UNDEF,
   VIEW,
   childPath,
@@ -58,10 +59,20 @@ function isThenable(value: Encoded): value is Promise<unknown> {
 }
 
 /**
- * `data:<mime>;base64,<payload>` → 字节。
- * `canonical` 表示「解码再编码得到的字符串与原文逐字相同」；只有这种才能改写成数据块。
+ * 规范 base64 的判据。
+ *
+ * 长度是 4 的倍数、字符只来自标准字母表、补位只在末尾且不超过两位——这三点成立时，
+ * 解码再编码一定得到原串，所以不必真的编一遍再比对。图片类存档里 data URL 动辄几十 MB，
+ * 那次多余的编码是导出阶段最大的一笔开销。
  */
-function parseDataUrl(value: string): { mime: string; bytes: Uint8Array; canonical: boolean } | null {
+const CANONICAL_BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
+
+function isCanonicalBase64(text: string): boolean {
+  return text.length % 4 === 0 && CANONICAL_BASE64.test(text);
+}
+
+/** `data:<mime>;base64,<payload>` → 字节；只有规范写法才能改写成数据块 */
+function parseDataUrl(value: string): { mime: string; bytes: Uint8Array } | null {
   if (value.length < DATA_URL_MIN || !value.startsWith('data:')) return null;
   const comma = value.indexOf(',');
   if (comma < 0) return null;
@@ -69,11 +80,11 @@ function parseDataUrl(value: string): { mime: string; bytes: Uint8Array; canonic
   if (!header.endsWith(';base64')) return null;
   const mime = header.slice(0, -';base64'.length);
   const payload = value.slice(comma + 1);
+  // 非规范写法（缺补位、URL 安全字母表、混进空白）拆块后还原不出原串，按普通字符串留着
+  if (!isCanonicalBase64(payload)) return null;
   try {
-    const bytes = base64ToBytes(payload);
-    return { mime, bytes, canonical: `data:${mime};base64,${bytesToBase64(bytes)}` === value };
+    return { mime, bytes: base64ToBytes(payload) };
   } catch {
-    // 含非 base64 字符（URL 安全字母表、混进空白的截断串）：当普通字符串原样留着
     return null;
   }
 }
@@ -144,6 +155,32 @@ async function settleFrom<T, R>(
   return out;
 }
 
+/** 同 `settleList`，但下标由数量给出：密集数组不必为此先分配一份索引数组 */
+function settleCount<R>(
+  count: number,
+  step: (index: number) => R | Promise<R>,
+): R[] | Promise<R[]> {
+  const out = new Array<R>(count);
+  for (let index = 0; index < count; index++) {
+    const value = step(index);
+    if (isThenable(value)) return settleCountFrom(value, index, count, step, out);
+    out[index] = value;
+  }
+  return out;
+}
+
+async function settleCountFrom<R>(
+  first: Promise<R>,
+  firstIndex: number,
+  count: number,
+  step: (index: number) => R | Promise<R>,
+  out: R[],
+): Promise<R[]> {
+  out[firstIndex] = await first;
+  for (let index = firstIndex + 1; index < count; index++) out[index] = await step(index);
+  return out;
+}
+
 function withId(out: Record<string, unknown>, id: number | undefined): Record<string, unknown> {
   if (id !== undefined) out[ID] = id;
   return out;
@@ -178,7 +215,7 @@ function encodeNode(value: unknown, blobs: BlobTable, ctx: Context, path: string
   if (value === null) return null;
   if (typeof value === 'string') {
     const dataUrl = parseDataUrl(value);
-    if (!dataUrl || !dataUrl.canonical) return value;
+    if (!dataUrl) return value;
     return blobs.addDataUrl(dataUrl.bytes).then(range => ({
       [BLOB]: range.file,
       [RANGE]: [range.offset, range.length],
@@ -345,18 +382,21 @@ function encodeNode(value: unknown, blobs: BlobTable, ctx: Context, path: string
     }
     case 'array': {
       const array = value as unknown[];
-      if (array.length > MAX_SPARSE_LENGTH) throw messageError('valueShapeInvalid', path);
-      const present = presentIndices(array);
-      if (useSparseForm(array.length, present.length)) {
-        const values = settleList(present, index =>
-          encodeNode(array[index], blobs, ctx, childPath(path, index), depth + 1));
-        const wrap = (list: unknown[]): Record<string, unknown> => withId({
-          [SPARSE]: { length: array.length, items: present.map((index, at) => [index, list[at]]) },
-        }, id);
-        return isThenable(values) ? values.then(wrap) : wrap(values);
+      const length = array.length;
+      if (length > MAX_SPARSE_LENGTH) throw messageError('valueShapeInvalid', path);
+      // 稀疏形态只对长数组有意义；短数组直接按索引走，省掉一次 Object.keys 与排序
+      if (length > SPARSE_MIN_LENGTH) {
+        const present = presentIndices(array);
+        if (useSparseForm(length, present.length)) {
+          const values = settleList(present, index =>
+            encodeNode(array[index], blobs, ctx, childPath(path, index), depth + 1));
+          const wrap = (list: unknown[]): Record<string, unknown> => withId({
+            [SPARSE]: { length, items: present.map((index, at) => [index, list[at]]) },
+          }, id);
+          return isThenable(values) ? values.then(wrap) : wrap(values);
+        }
       }
-      const indices = Array.from({ length: array.length }, (_item, index) => index);
-      const items = settleList(indices, index =>
+      const items = settleCount(length, index =>
         (hasOwn(array, String(index))
           ? encodeNode(array[index], blobs, ctx, childPath(path, index), depth + 1)
           : { [HOLE]: true }));

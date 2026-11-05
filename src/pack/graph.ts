@@ -211,8 +211,10 @@ export function presentIndices(array: readonly unknown[]): number[] {
  * 稀疏形态的判据：长度很大且实际存在的索引不到一半。
  * 密集数组按索引逐个写空洞标记，长数组会展开成上百万个标记。
  */
+export const SPARSE_MIN_LENGTH = 1024;
+
 export function useSparseForm(length: number, present: number): boolean {
-  return length > 1024 && present * 2 < length;
+  return length > SPARSE_MIN_LENGTH && present * 2 < length;
 }
 
 /**
