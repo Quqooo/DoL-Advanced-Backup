@@ -172,21 +172,15 @@ export class BlobTable {
     return `data/${sha256}.bin`;
   }
 
-  async add(bytes: Uint8Array, source?: string): Promise<ManifestBlob> {
+  async add(bytes: Uint8Array): Promise<ManifestBlob> {
     const sha256 = await sha256Hex(bytes);
     const existing = this.items.get(sha256);
-    if (existing) {
-      if (source && existing.blob.sources && !existing.blob.sources.includes(source)) {
-        existing.blob.sources.push(source);
-      }
-      return existing.blob;
-    }
+    if (existing) return existing.blob;
     const file = this.nameOf(sha256);
     const blob: ManifestBlob = {
       sha256,
       file,
       bytes: bytes.length,
-      ...(source ? { sources: [source] } : {}),
     };
     this.items.set(sha256, { blob, bytes });
     this.files.set(file, sha256);

@@ -68,7 +68,6 @@ export interface ManifestBlob {
   bytes: number;
   /** 未压缩数据的 CRC32；可选，导出时顺带记上就多一层不解压的校验 */
   crc32?: string;
-  sources?: string[];
 }
 
 /**

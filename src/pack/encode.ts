@@ -247,7 +247,7 @@ function encodeNode(value: unknown, blobs: BlobTable, ctx: Context, path: string
     case 'buffer': {
       const buffer = value as ArrayBuffer;
       const resizable = (buffer as ArrayBuffer & { resizable?: boolean }).resizable === true;
-      return blobs.add(toBytes(buffer), path).then(blob => {
+      return blobs.add(toBytes(buffer)).then(blob => {
         const out: Record<string, unknown> = { [BUFFER]: true, [BLOB]: blob.file };
         if (resizable) {
           out[RESIZABLE] = true;
@@ -273,7 +273,7 @@ function encodeNode(value: unknown, blobs: BlobTable, ctx: Context, path: string
     case 'file': {
       const blob = value as Blob;
       return blob.arrayBuffer()
-        .then(buffer => blobs.add(new Uint8Array(buffer), path))
+        .then(buffer => blobs.add(new Uint8Array(buffer)))
         .then(entry => {
           const out: Record<string, unknown> = { [BLOB]: entry.file, [MIME]: blob.type };
           if (shape.kind === 'file') {
@@ -285,7 +285,7 @@ function encodeNode(value: unknown, blobs: BlobTable, ctx: Context, path: string
     }
     case 'image': {
       const image = value as ImageData;
-      return blobs.add(toBytes(image.data), path).then(entry => {
+      return blobs.add(toBytes(image.data)).then(entry => {
         const spec: Record<string, unknown> = { width: image.width, height: image.height };
         if (supportsColorSpace() && typeof image.colorSpace === 'string') spec.colorSpace = image.colorSpace;
         return withId({ [IMAGE]: spec, [BLOB]: entry.file }, id);
@@ -451,7 +451,5 @@ export function collectBlobRefs(value: unknown, into: Set<string>): void {
   }
 }
 
-/** 旧调用点仍从这里取解码器；新代码按包格式显式建解码器 */
-export { createDecoder, decodeValue } from './decode';
 export type { BlobResolver } from './graph';
 export { assertSupported } from './graph';

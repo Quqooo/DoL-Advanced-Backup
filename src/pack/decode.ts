@@ -60,11 +60,6 @@ export function createDecoder(format: 1 | 2, resolve: BlobResolver): Decoder {
   return format === 1 ? createV1(resolve) : createV2(resolve);
 }
 
-/** 薄封装：按 `format: 1` 解码。新代码必须显式给格式 */
-export function decodeValue(value: unknown, resolve: BlobResolver): unknown {
-  return createV1(resolve).decode(value);
-}
-
 /** 复制一份独立缓冲：IDB 的键不接受视图，写回去的必须是干净的 ArrayBuffer */
 function ownBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
