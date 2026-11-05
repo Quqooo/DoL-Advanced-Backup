@@ -1,5 +1,6 @@
 import { exportPackage } from '../../app/export';
 import { measureItem, retryCollector, scan, scanBusy, watchScan } from '../../app/scan';
+import { askSkipUnsupported } from '../../app/unsupported-choice';
 import { resetScan, SCAN_MAX_AGE_MS, scanExpired, session } from '../../app/session';
 import { formatBytes, formatTotal } from '../../core/format';
 import { measureFallback, type Item, type ScanResult } from '../../core/item';
@@ -351,6 +352,10 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
       selected,
       signal,
       onProgress: progress.show,
+      // 无法无损编码的值先问一次；确认跳过后本次余下同类条目不再逐条询问
+      options: {
+        onUnsupported: async error => ((await askSkipUnsupported(error, 'export')) ? 'skip' : 'abort'),
+      },
     })
       .then(
         outcome => {

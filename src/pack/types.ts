@@ -2,6 +2,14 @@ import type { Manifest } from '../core/manifest';
 import type { Progress } from '../core/progress';
 import type { Compression } from './codec';
 
+/**
+ * 遇到无法无损编码的值时怎么处理：
+ * - `abort`：中止整次导出（API 默认）；
+ * - `skip`：跳过该条并记入清单，恢复侧不再把它当本机多余；
+ * - 函数：询问用户，返回 `skip` 后本次余下的同类条目一并跳过，避免连续弹窗。
+ */
+export type UnsupportedPolicy = 'abort' | 'skip' | ((error: unknown) => Promise<'abort' | 'skip'>);
+
 export interface PackOptions {
   compression: Compression;
   skipCompressed: boolean;
@@ -14,9 +22,9 @@ export interface PackOptions {
   modpackWrap?: boolean;
   /**
    * 遇到无法无损编码的记录时：缺省中止整次导出；`skip` 跳过该条并在清单里记下地址。
-   * 只有快照在用户确认后使用 `skip`，手工导出不提供这个选择。
+   * 手工导出与快照都先询问用户，确认后才按 `skip` 继续。
    */
-  onUnsupported?: 'abort' | 'skip';
+  onUnsupported?: UnsupportedPolicy;
 }
 
 export interface PackMeta {

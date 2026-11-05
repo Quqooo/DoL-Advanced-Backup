@@ -146,6 +146,11 @@ export interface Strings {
   snapshotUnsupportedBody: (type: string, path: string) => string;
   snapshotUnsupportedSkip: string;
   snapshotUnsupportedAbort: string;
+  /** 导出遇到无法无损编码的值：跳过全部这类条目，或中止本次导出 */
+  exportUnsupportedTitle: string;
+  exportUnsupportedBody: (type: string, path: string) => string;
+  exportUnsupportedSkip: string;
+  exportUnsupportedAbort: string;
   snapshotRepaired: string;
   actionRestore: string;
   actionExport: string;
@@ -424,6 +429,11 @@ const ZH: Strings = {
     `${type} 无法无损备份（${path}）。跳过所有无法无损备份的条目，继续生成快照吗？`,
   snapshotUnsupportedSkip: '跳过并继续',
   snapshotUnsupportedAbort: '中止本次快照',
+  exportUnsupportedTitle: '无法无损导出',
+  exportUnsupportedBody: (type, path) =>
+    `${type} 无法无损导出（${path}）。跳过所有无法无损导出的条目，继续导出吗？`,
+  exportUnsupportedSkip: '跳过并继续',
+  exportUnsupportedAbort: '中止本次导出',
   snapshotRepaired: '元数据已修正',
   actionRestore: '恢复',
   actionExport: '导出',
@@ -796,6 +806,11 @@ const EN: Strings = {
     `${type} cannot be backed up losslessly (${path}). Skip all such entries and continue?`,
   snapshotUnsupportedSkip: 'Skip and Continue',
   snapshotUnsupportedAbort: 'Abort Snapshot',
+  exportUnsupportedTitle: 'Cannot Export Losslessly',
+  exportUnsupportedBody: (type, path) =>
+    `${type} cannot be backed up losslessly (${path}). Skip all such entries and continue the export?`,
+  exportUnsupportedSkip: 'Skip and Continue',
+  exportUnsupportedAbort: 'Abort Export',
   snapshotRepaired: 'Metadata repaired',
   actionRestore: 'Restore',
   actionExport: 'Export',

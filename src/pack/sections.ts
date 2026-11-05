@@ -22,6 +22,7 @@ import { readDetails, readLegacy, readSaves } from '../store/saves';
 import type { BlobTable } from './blob';
 import { encodeValue, collectBlobRefs } from './encode';
 import { assertSupported } from './graph';
+import type { UnsupportedPolicy } from './types';
 
 /**
  * 一个分区：`write` 负责序列化进 sink。小分区一次写完；整库从一致性缓存分页编码。
@@ -63,9 +64,9 @@ export interface BuildInput {
   onProgress?: (ratio: number, label?: string) => void;
   /**
    * 遇到无法无损编码的记录时怎么办。缺省中止整次导出：没有完整数据就不写包。
-   * `skip` 只在用户确认后使用（快照），跳过的地址会写进清单，恢复时受保护。
+   * 函数策略由调用方询问用户；跳过的地址会写进清单，恢复时受保护。
    */
-  onUnsupported?: 'abort' | 'skip';
+  onUnsupported?: UnsupportedPolicy;
 }
 
 /** 小分区：整个对象一次写完 */
@@ -125,8 +126,13 @@ const PAGE = 1000;
  *
  * 库的记录已经在 `openDbReader` 里缓存好，这里只走结构、不算哈希、不读 Blob；
  * 跳过整库而不是跳过单条，否则恢复时的镜像删除会把没进包的那条当成「本机多余」。
+ * 返回具体异常，供调用方询问用户时显示类型与路径。
  */
-async function acceptsDatabase(reader: DbReader): Promise<boolean> {
+function isUnsupportedValue(error: unknown): boolean {
+  return (error as { id?: string } | null)?.id === 'unsupportedValue';
+}
+
+async function databaseUnsupported(name: string, reader: DbReader): Promise<unknown | null> {
   try {
     for (const store of reader.stores) {
       let after: DbKey | undefined;
@@ -134,16 +140,17 @@ async function acceptsDatabase(reader: DbReader): Promise<boolean> {
         const page = await reader.page(store.name, after, PAGE);
         if (page.length === 0) break;
         for (const record of page) {
-          assertSupported(record.key, `${store.name}/key`);
-          assertSupported(record.value, store.name);
+          // 路径带上库名：询问时只写仓库名不知道是哪个库，与整库写入时的路径保持一致
+          assertSupported(record.key, `${name}/${store.name}/key`);
+          assertSupported(record.value, `${name}/${store.name}`);
         }
         after = page[page.length - 1].key;
         if (page.length < PAGE) break;
       }
     }
-    return true;
+    return null;
   } catch (error) {
-    if ((error as { id?: string }).id === 'unsupportedValue') return false;
+    if ((error as { id?: string }).id === 'unsupportedValue') return error;
     throw error;
   }
 }
@@ -161,7 +168,8 @@ function databaseTask(
   refs: Set<string>,
   /** 每个库写完交一次字节数；库在导出途中消失或被跳过时给 null，索引里就不收它 */
   onDatabaseDone: (name: string, bytes: number | null) => void,
-  policy: 'abort' | 'skip',
+  /** 预检发现不支持的值时由它决定跳过还是抛出；`undefined` 表示直接编码、不预检 */
+  shouldSkip: ((error: unknown) => Promise<boolean>) | undefined,
   skipped: Set<string>,
 ): SectionTask {
   const task: SectionTask = {
@@ -185,11 +193,16 @@ function databaseTask(
         const before = written;
         const reader = await openDbReader(name);
         if (!reader) throw messageError('packSelectionMissing', name);
-        if (policy === 'skip' && !(await acceptsDatabase(reader))) {
+        const failure = shouldSkip ? await databaseUnsupported(name, reader) : null;
+        if (failure && shouldSkip && await shouldSkip(failure)) {
           skipped.add(idbAddr(name));
           reader.close();
           onDatabaseDone(name, null);
           continue;
+        }
+        if (failure) {
+          reader.close();
+          throw failure;
         }
         {
           dbs += 1;
@@ -274,6 +287,18 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
   const refs = new Set<string>();
   const policy = onUnsupported ?? 'abort';
   const skipped = new Set<string>();
+  // 用户确认一次「跳过」后，本次导出余下同类条目不再逐条询问
+  let skipAll = policy === 'skip';
+  const skipUnsupported = async (error: unknown): Promise<boolean> => {
+    if (!isUnsupportedValue(error)) return false;
+    if (skipAll) return true;
+    if (typeof policy !== 'function') return false;
+    if ((await policy(error)) === 'skip') {
+      skipAll = true;
+      return true;
+    }
+    return false;
+  };
   const index: ManifestIndex = { keys: [], saves: [], legacy: false, dbs: [] };
 
   const slots = saveSlots(selected);
@@ -349,7 +374,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
           delta: Boolean(data && typeof data === 'object' && Array.isArray(data.delta)),
         });
       } catch (error) {
-        if (policy !== 'skip' || (error as { id?: string }).id !== 'unsupportedValue') throw error;
+        if (!(await skipUnsupported(error))) throw error;
         // 单条存档无法无损编码：整槽（含 details）都不进包，记下地址供恢复侧保护
         skipped.add(saveAddr(record.slot));
       }
@@ -364,7 +389,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
       try {
         detailRows.push({ slot: record.slot, data: await encodeValue(record.data, blobs, `saves/${record.slot}/details`) });
       } catch (error) {
-        if (policy !== 'skip' || (error as { id?: string }).id !== 'unsupportedValue') throw error;
+        if (!(await skipUnsupported(error))) throw error;
         dropped.add(record.slot);
         skipped.add(saveAddr(record.slot));
       }
@@ -417,7 +442,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
         // 库在导出途中消失或被跳过就没有索引项，恢复页也就不会列它
         if (bytes !== null) dbIndex.push({ name, b: bytes });
         advance('idb', 1 / names.length, 'idb.json');
-      }, policy, skipped));
+      }, policy === 'abort' ? undefined : skipUnsupported, skipped));
       index.dbs = dbIndex;
     } else {
       advance('idb');

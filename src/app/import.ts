@@ -15,7 +15,7 @@ import { forecastDeletions, mirrorScopeOf, planRestore } from '../restore/plan';
 import { readPrefs } from '../store/prefs';
 import { useGameDb } from '../store/saves';
 import { autoSnapshot } from '../snapshot/auto';
-import { askSkipUnsupported } from './snapshot-choice';
+import { askSkipUnsupported } from './unsupported-choice';
 import { incompleteGroups } from '../snapshot';
 import { scan } from './scan';
 import { resetScan } from './session';

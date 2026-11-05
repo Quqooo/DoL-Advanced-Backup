@@ -23,7 +23,7 @@ import {
 import { getSnapshotMeta } from '../store/snapshots';
 import { importPackage, type ImportResult } from './import';
 import { scan } from './scan';
-import { askSkipUnsupported } from './snapshot-choice';
+import { askSkipUnsupported } from './unsupported-choice';
 
 const VERSION = __ADVBK_VERSION__;
 
