@@ -11,7 +11,7 @@ Full backup and restore for [Degrees of Lewdity](https://gitgud.io/Vrelnir/degre
 
 > [!Warning]
 >
-> This mod does not guarantee absolutely lossless data. Backup and restore read and write browser storage directly, so a large jump between game versions, an interrupted restore, or a bug in this mod can all leave incomplete data. Export important saves with the game's own export function as well!
+> This mod does not guarantee absolutely lossless data. Backup and restore read and write browser storage directly, so a change in the game's storage layout, an interrupted restore, or a bug in this mod can all leave incomplete data. Export important saves with the game's own export function as well!
 
 ## Features
 
@@ -23,6 +23,9 @@ The mod adds an `Advanced Backup` tab to the Saves window.
 
 Lists the data on this machine as a grouped tree. Four check presets make selection quick, and you can also check
 items freely to set the backup scope. The result is a `.zip` containing the selected data.
+
+Values that cannot be encoded losslessly (`CryptoKey`, `FileList`, `ImageBitmap`, functions, `Symbol`, and similar)
+trigger a prompt; you can skip them and continue the export.
 
 - Groups: Game Data (saves / feats / settings), Mod Loader (mod packs / order / state / image packs), external mod data, other
 - Presets: **Full** / **Standard** / **Mods** / **Custom**
@@ -86,3 +89,7 @@ If the call runs before this mod loads (both scripts use `inject_early`), push t
 window.AdvancedBackupMapping ??= [];
 window.AdvancedBackupMapping.push({ mod: 'MyMod', label: 'My Mod', keys: ['mymod.settings'] });
 ```
+
+## AI Usage Disclosure
+
+This mod was developed mainly with AI. Back up important data before use, and decide whether the mod fits your environment.
