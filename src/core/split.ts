@@ -1,4 +1,5 @@
 import { messageError } from './error';
+import { EOCD_SIZE, dosTime, localHeader, centralHeader, eocdRecord, type ZipEntryHeader } from './zipwrite';
 
 /**
  * 把成品包放进一个多卷 ZIP。
@@ -17,77 +18,7 @@ export interface SplitPart {
 /** 卷数上限：命名用两位序号，`.z01`–`.z99` */
 export const MAX_SPLIT_PARTS = 99;
 
-const LOCAL_SIZE = 30;
-const CENTRAL_SIZE = 46;
-const EOCD_SIZE = 22;
-const FLAG_UTF8 = 0x0800;
 const MAX_UINT32 = 0xffffffff;
-
-function dosTime(date: Date): { time: number; date: number } {
-  const year = Math.max(1980, date.getFullYear());
-  return {
-    time: (date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1),
-    date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
-  };
-}
-
-function localHeader(nameBytes: Uint8Array, size: number, crc: number, stamp: { time: number; date: number }): Uint8Array {
-  const out = new Uint8Array(LOCAL_SIZE + nameBytes.length);
-  const view = new DataView(out.buffer);
-  view.setUint32(0, 0x04034b50, true);
-  view.setUint16(4, 20, true);
-  view.setUint16(6, FLAG_UTF8, true);
-  view.setUint16(8, 0, true);
-  view.setUint16(10, stamp.time, true);
-  view.setUint16(12, stamp.date, true);
-  view.setUint32(14, crc, true);
-  view.setUint32(18, size, true);
-  view.setUint32(22, size, true);
-  view.setUint16(26, nameBytes.length, true);
-  view.setUint16(28, 0, true);
-  out.set(nameBytes, LOCAL_SIZE);
-  return out;
-}
-
-function centralHeader(nameBytes: Uint8Array, size: number, crc: number, stamp: { time: number; date: number }): Uint8Array {
-  const out = new Uint8Array(CENTRAL_SIZE + nameBytes.length);
-  const view = new DataView(out.buffer);
-  view.setUint32(0, 0x02014b50, true);
-  view.setUint16(4, 20, true);
-  view.setUint16(6, 20, true);
-  view.setUint16(8, FLAG_UTF8, true);
-  view.setUint16(10, 0, true);
-  view.setUint16(12, stamp.time, true);
-  view.setUint16(14, stamp.date, true);
-  view.setUint32(16, crc, true);
-  view.setUint32(20, size, true);
-  view.setUint32(24, size, true);
-  view.setUint16(28, nameBytes.length, true);
-  view.setUint16(30, 0, true);
-  view.setUint16(32, 0, true);
-  view.setUint16(34, 0, true);
-  view.setUint16(36, 0, true);
-  view.setUint32(38, 0, true);
-  // 条目从第一卷开始，本地头在归档起点
-  view.setUint32(42, 0, true);
-  out.set(nameBytes, CENTRAL_SIZE);
-  return out;
-}
-
-/** 只有一份 EOCD：卷号写最后一卷，中央目录也在最后一卷 */
-function eocdRecord(disk: number, centralSize: number, centralOffset: number): Uint8Array {
-  const out = new Uint8Array(EOCD_SIZE);
-  const view = new DataView(out.buffer);
-  view.setUint32(0, 0x06054b50, true);
-  view.setUint16(4, disk, true);
-  view.setUint16(6, disk, true);
-  view.setUint16(8, 1, true);
-  view.setUint16(10, 1, true);
-  view.setUint32(12, centralSize, true);
-  view.setUint32(16, centralOffset, true);
-  view.setUint16(20, 0, true);
-  return out;
-}
 
 /** `.z01`、`.z02`…，最后一卷是 `.zip` */
 function partName(entryName: string, index: number, count: number): string {
@@ -110,10 +41,17 @@ export function splitPackage(
   const size = packageBlob.size;
   if (size > MAX_UINT32) throw messageError('splitTooLarge');
 
-  const nameBytes = new TextEncoder().encode(entryName);
-  const stamp = dosTime(new Date());
-  const local = localHeader(nameBytes, size, crc, stamp);
-  const central = centralHeader(nameBytes, size, crc, stamp);
+  const facts: ZipEntryHeader = {
+    nameBytes: new TextEncoder().encode(entryName),
+    method: 0,
+    crc,
+    comp: size,
+    size,
+    ...dosTime(new Date()),
+  };
+  const local = localHeader(facts);
+  // 条目从第一卷开始，本地头在归档起点。
+  const central = centralHeader(facts, 0);
 
   // 中央目录在最后一卷内的偏移：最后一卷可能从数据中间开始
   const total = local.length + size + central.length + EOCD_SIZE;
@@ -122,7 +60,7 @@ export function splitPackage(
 
   const lastStart = (count - 1) * partSize;
   const centralOffset = local.length + size - lastStart;
-  const whole = new Blob([local as unknown as BlobPart, packageBlob, central as unknown as BlobPart, eocdRecord(count - 1, central.length, centralOffset) as unknown as BlobPart]);
+  const whole = new Blob([local as unknown as BlobPart, packageBlob, central as unknown as BlobPart, eocdRecord(1, central.length, centralOffset, count - 1) as unknown as BlobPart]);
 
   const parts: SplitPart[] = [];
   for (let index = 0; index < count; index++) {

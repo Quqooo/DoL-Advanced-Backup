@@ -2,6 +2,7 @@
 
 import type { ByteSink } from '../core/sink';
 import type { ZipMethod } from '../core/zipread';
+import { LOCAL_SIZE, CENTRAL_SIZE, EOCD_SIZE, dosTime, localHeader, centralHeader, eocdRecord, type ZipEntryHeader } from '../core/zipwrite';
 // CRC 放在 core：读端也要用它校验解出来的字节，而 core 不能引用 pack
 export { createCrc32, crc32, type Crc32 } from '../core/crc32';
 import { crc32 } from '../core/crc32';
@@ -18,10 +19,6 @@ export interface ZipEntry {
   time?: Date;
 }
 
-const LOCAL_SIZE = 30;
-const CENTRAL_SIZE = 46;
-const EOCD_SIZE = 22;
-
 /**
  * zip 的长度字段是 uint32、条目数是 uint16，而这里没有实现 zip64。
  *
@@ -34,34 +31,9 @@ const MAX_ENTRIES = 0xffff;
 function assertCapacity(what: string, value: number, limit: number): void {
   if (value > limit) throw new Error(`${what}超过 ${limit}，暂不支持 zip64`);
 }
-/** 通用位 11：文件名是 UTF-8 */
-const FLAG_UTF8 = 0x0800;
 
-function dosTime(date: Date): { time: number; date: number } {
-  const year = Math.max(1980, date.getFullYear());
-  return {
-    time: (date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1),
-    date: ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(),
-  };
-}
-
-/** ZSTD 需要 6.3 的版本号，读端据此判断能不能解 */
-function versionNeeded(method: ZipMethod): number {
-  return method === 93 ? 63 : 20;
-}
-
-/** 条目派生值：本地头与中央目录共用同一份，两处不会写出不同的长度或 CRC */
-interface EntryFacts {
-  nameBytes: Uint8Array;
-  method: ZipMethod;
-  crc: number;
-  comp: number;
-  size: number;
-  time: number;
-  date: number;
-}
-
-function factsOf(entry: ZipEntry, fallbackTime: Date): EntryFacts {
+/** 本地头与中央目录共用条目派生值，避免长度或 CRC 不一致。 */
+function factsOf(entry: ZipEntry, fallbackTime: Date): ZipEntryHeader {
   const stamp = dosTime(entry.time ?? fallbackTime);
   assertCapacity(`条目 ${entry.name} 的压缩后长度`, entry.data.length, MAX_UINT32);
   assertCapacity(`条目 ${entry.name} 的原始长度`, entry.size ?? entry.data.length, MAX_UINT32);
@@ -74,62 +46,6 @@ function factsOf(entry: ZipEntry, fallbackTime: Date): EntryFacts {
     time: stamp.time,
     date: stamp.date,
   };
-}
-
-function localHeader(facts: EntryFacts): Uint8Array {
-  const out = new Uint8Array(LOCAL_SIZE + facts.nameBytes.length);
-  const view = new DataView(out.buffer);
-  view.setUint32(0, 0x04034b50, true);
-  view.setUint16(4, versionNeeded(facts.method), true);
-  view.setUint16(6, FLAG_UTF8, true);
-  view.setUint16(8, facts.method, true);
-  view.setUint16(10, facts.time, true);
-  view.setUint16(12, facts.date, true);
-  view.setUint32(14, facts.crc, true);
-  view.setUint32(18, facts.comp, true);
-  view.setUint32(22, facts.size, true);
-  view.setUint16(26, facts.nameBytes.length, true);
-  view.setUint16(28, 0, true);
-  out.set(facts.nameBytes, LOCAL_SIZE);
-  return out;
-}
-
-function centralHeader(facts: EntryFacts, offset: number): Uint8Array {
-  const out = new Uint8Array(CENTRAL_SIZE + facts.nameBytes.length);
-  const view = new DataView(out.buffer);
-  view.setUint32(0, 0x02014b50, true);
-  view.setUint16(4, versionNeeded(facts.method), true);
-  view.setUint16(6, versionNeeded(facts.method), true);
-  view.setUint16(8, FLAG_UTF8, true);
-  view.setUint16(10, facts.method, true);
-  view.setUint16(12, facts.time, true);
-  view.setUint16(14, facts.date, true);
-  view.setUint32(16, facts.crc, true);
-  view.setUint32(20, facts.comp, true);
-  view.setUint32(24, facts.size, true);
-  view.setUint16(28, facts.nameBytes.length, true);
-  view.setUint16(30, 0, true);
-  view.setUint16(32, 0, true);
-  view.setUint16(34, 0, true);
-  view.setUint16(36, 0, true);
-  view.setUint32(38, 0, true);
-  view.setUint32(42, offset, true);
-  out.set(facts.nameBytes, CENTRAL_SIZE);
-  return out;
-}
-
-function eocdRecord(count: number, centralSize: number, centralOffset: number): Uint8Array {
-  const out = new Uint8Array(EOCD_SIZE);
-  const view = new DataView(out.buffer);
-  view.setUint32(0, 0x06054b50, true);
-  view.setUint16(4, 0, true);
-  view.setUint16(6, 0, true);
-  view.setUint16(8, count, true);
-  view.setUint16(10, count, true);
-  view.setUint32(12, centralSize, true);
-  view.setUint32(16, centralOffset, true);
-  view.setUint16(20, 0, true);
-  return out;
 }
 
 /** 只按「名字 + 压缩后长度」算体积：模组字节还没读时也要能算准内层 zip 多大 */
@@ -203,7 +119,7 @@ export function zipBytes(entries: readonly ZipEntry[]): Uint8Array {
  */
 export class ZipWriter {
   private offset = 0;
-  private readonly facts: EntryFacts[] = [];
+  private readonly facts: ZipEntryHeader[] = [];
   private readonly offsets: number[] = [];
 
   constructor(
