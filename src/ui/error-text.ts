@@ -43,7 +43,7 @@ export interface FailureRow {
 }
 
 /**
- * 失败清单，最多 `limit` 条——一次失败几十条时不该把错误条撑满。
+ * 失败清单最多显示 `limit` 条，限制错误提示的长度。
  * 完整明细由调用方另外拼（悬停提示要全）。
  */
 export function failureLines(

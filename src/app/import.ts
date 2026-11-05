@@ -72,7 +72,7 @@ export interface ImportResult {
  * 装上包内映射：优先级高于第三方注册与内置表。
  *
  * 读包前必须装好，`planRestore` 用当前映射给地址分组；没有这个文件就清掉上一层，
- * 免得上一份包的表继续生效。
+ * 避免上一份包的映射表继续生效。
  */
 async function applyPackMapping(bundle: Bundle): Promise<void> {
   if (!bundle.has('mapping.json')) {

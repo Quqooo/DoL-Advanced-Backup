@@ -79,7 +79,7 @@ interface BsonRead {
  * 解析一个 BSON 值。
  *
  * `limit` 是**所在文档**的结尾（不含结尾 NUL）：每个类型都要按它检查读到的长度，
- * 只按整段字节检查的话，一个子文档可以把后面的父级元素当成自己的内容吃掉。
+ * 仅检查整体字节边界会允许子文档越过自身范围，将后续父级元素解析为子文档内容。
  * 越界一律抛错——调用方（`readLayout` / `readModPackMeta` / `readModPackLayoutFrom`）
  * 把它当作「不是本格式」并返回 null。
  */

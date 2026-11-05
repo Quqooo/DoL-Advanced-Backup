@@ -42,7 +42,7 @@ export interface LeafHooks {
  * 行的悬停提示：明细 + 锁定原因 + 体积说明。
  *
  * 锁定判据会随模式与「保留本模组」变（`relock()`），所以标题只能由这一个函数拼，
- * 免得改锁的时候漏掉某一段。
+ * 保证锁定规则变化时，各段提示同步更新。
  */
 export function rowTitle(item: Item, reason: string): string {
   const lines = [item.detail?.length ? item.detail.join('\n') : item.addr];

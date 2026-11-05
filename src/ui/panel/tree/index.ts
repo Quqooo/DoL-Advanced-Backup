@@ -671,7 +671,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
         record.row.classList.toggle('advbk-row-locked', reason !== '');
         record.row.title = rowTitle(record.item, reason);
       }
-      // 勾选集也要跟着收：`sync` 会把刚上锁的地址摘掉，并更新分组三态与档位
+      // `sync` 移除已锁定地址的勾选，并更新分组三态与档位。
       sync();
     },
     releaseMeasure(addrs) {

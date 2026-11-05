@@ -161,7 +161,7 @@ async function applyLists(state: ApplyState, env: ModEnv): Promise<void> {
     }
     // 只恢复禁用列表时，新禁用的名字必须同时离开启用列表：宿主只看启用列表，
     // 两份都含同一个名字等于没禁用。勾了顺序列表时上面已经按 hiddenAfter 写过。
-    // 放在禁用列表写成功之后：写失败时不能顺手把模组停用。
+    // 禁用列表写入成功后才调整启用列表，避免写入失败时改变模组状态。
     // 包内没有顺序列表（`order: null`）时也要收紧：那个名字本机可能正在启用。
     if (hiddenWritten && !orderWritten && !sameList(enabled, localLists.enabled)) {
       try {
