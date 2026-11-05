@@ -77,9 +77,9 @@ const STATIC_KEY_PATTERNS: readonly { test: RegExp; group: string }[] = [
  * 整库的静态分组：这几个库属于模组加载器自己，不该落到「其他」或「外部模组数据」。
  * 图像包的排序是用户设置，两个缓存库能从模组包重建。
  */
-const STATIC_DB_GROUPS: readonly { dbs: readonly string[]; group: string }[] = [
-  { dbs: [IMAGE_ORDER_DB], group: 'mods/image-order' },
-  { dbs: [IMAGE_FILELIST_DB, IMAGE_STORE_DB], group: 'mods/image-cache' },
+const STATIC_DB_GROUPS: readonly { keys: readonly string[]; group: string }[] = [
+  { keys: [IMAGE_ORDER_DB], group: 'mods/image-order' },
+  { keys: [IMAGE_FILELIST_DB, IMAGE_STORE_DB], group: 'mods/image-cache' },
 ];
 
 /** 图像包缓存库：能重建，标准档与模组档都不勾 */
@@ -97,26 +97,16 @@ const STATIC_SESSION_GROUPS: readonly { keys: readonly string[]; group: string }
   { keys: [SESSION_WARN_KEY], group: 'session/rcWarn' },
 ];
 
-function staticGroupOf(key: string): string | null {
-  for (const rule of STATIC_KEY_GROUPS) {
-    if (rule.keys.includes(key)) return rule.group;
+function staticGroupOf(value: string, rules: readonly { keys: readonly string[]; group: string }[]): string | null {
+  for (const rule of rules) {
+    if (rule.keys.includes(value)) return rule.group;
   }
+  return null;
+}
+
+function staticGroupByPattern(value: string): string | null {
   for (const rule of STATIC_KEY_PATTERNS) {
-    if (rule.test.test(key)) return rule.group;
-  }
-  return null;
-}
-
-function staticSessionGroupOf(key: string): string | null {
-  for (const rule of STATIC_SESSION_GROUPS) {
-    if (rule.keys.includes(key)) return rule.group;
-  }
-  return null;
-}
-
-function staticDbGroupOf(name: string): string | null {
-  for (const rule of STATIC_DB_GROUPS) {
-    if (rule.dbs.includes(name)) return rule.group;
+    if (rule.test.test(value)) return rule.group;
   }
   return null;
 }
@@ -144,18 +134,19 @@ export function groupOf(addr: string, ctx: GroupContext, flags?: ItemFlags): str
 
   switch (parsed.scheme) {
     case 'ls':
-      return staticGroupOf(parsed.name)
+      return staticGroupOf(parsed.name, STATIC_KEY_GROUPS)
+        ?? staticGroupByPattern(parsed.name)
         ?? mappingGroup(ctx.mapping, 'key', parsed.name)
         ?? otherGroup(ctx);
     case 'ss':
-      return staticSessionGroupOf(parsed.name)
+      return staticGroupOf(parsed.name, STATIC_SESSION_GROUPS)
         ?? mappingGroup(ctx.mapping, 'sessionKey', parsed.name)
         ?? otherGroup(ctx);
     case 'ck':
       // 旧包里的 Cookie 条目不恢复、不显示，也不参与分组
       return null;
     case 'idb':
-      return staticDbGroupOf(parsed.name) ?? mappingGroup(ctx.mapping, 'db', parsed.name) ?? otherGroup(ctx);
+      return staticGroupOf(parsed.name, STATIC_DB_GROUPS) ?? mappingGroup(ctx.mapping, 'db', parsed.name) ?? otherGroup(ctx);
     case 'save':
       // 自动存档（槽 0）与旧式存档直接挂在「存档」下，只有手动槽再套一层分页
       if (parsed.engine === 'legacy' || parsed.slot === 0) return 'saves';

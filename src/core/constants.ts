@@ -26,6 +26,9 @@ export const IMAGE_ORDER_KEY = 'BeautySelectorAddon_OrderSaveKey';
 export const IMAGE_FILELIST_DB = 'BeautySelectorAddon_dbNameCacheFileList';
 export const IMAGE_STORE_DB = 'BeautySelectorAddon_dbNameImageStore';
 
+/** 自动快照保留与显示的默认槽位数 */
+export const AUTO_KEEP = 3;
+
 export const SNAP_DB = 'AdvancedBackup';
 export const SNAP_VERSION = 1;
 export const SNAP_META_STORE = 'meta';

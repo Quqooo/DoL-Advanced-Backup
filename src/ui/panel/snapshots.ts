@@ -8,7 +8,7 @@ import {
   type SnapshotMeta,
 } from '../../app/snapshots';
 import { formatBytes, formatDateTime } from '../../core/format';
-import { SELF_RESTORE_WRAP_LIMIT } from '../../core/constants';
+import { AUTO_KEEP, SELF_RESTORE_WRAP_LIMIT } from '../../core/constants';
 import { confirmDialog, promptDialog } from '../../host/dialog';
 import { t } from '../i18n';
 import { describeError } from '../error-text';
@@ -16,8 +16,6 @@ import { dom, escapeHtml } from './dom';
 import { createNotices, toast } from './feedback';
 import type { TaskGate } from './gate';
 import { createProgress } from './progress';
-
-const AUTO_SLOTS = 3;
 
 export interface SnapshotPaneDeps {
   gate: TaskGate;
@@ -29,7 +27,7 @@ export interface SnapshotPaneDeps {
 
 /**
  * 手动快照的行名：改过名用改过的，没改名用创建时间。
- * 自动槽不按名字排（固定三个位置，名字由槽位序号给），所以这里只服务手动列表。
+ * 自动槽不按名字排（固定数量的位置，名字由槽位序号给），所以这里只服务手动列表。
  */
 function labelOf(meta: SnapshotMeta): string {
   return meta.label || formatDateTime(Date.parse(meta.createdAt));
@@ -80,7 +78,7 @@ export function createSnapshotPane(deps: SnapshotPaneDeps): { el: HTMLElement; r
   const manualGroup = group('manual', t().snapshotManualGroup);
   body.append(autoGroup.section, manualGroup.section);
   // 初始就是空列表：切过来的第一帧不该是一片空白
-  autoGroup.fill([emptyRow(), emptyRow(), emptyRow()]);
+  autoGroup.fill(Array.from({ length: AUTO_KEEP }, emptyRow));
   manualGroup.fill([emptyRow()]);
 
   const notices = createNotices();
@@ -164,7 +162,7 @@ export function createSnapshotPane(deps: SnapshotPaneDeps): { el: HTMLElement; r
         const wrap = meta.bytes > SELF_RESTORE_WRAP_LIMIT
           ? await confirmDialog({
               title: t().snapshotWrapTitle,
-              body: `<p>${t().snapshotWrapBody(formatBytes(meta.bytes))}</p>`,
+              body: `<p>${escapeHtml(t().snapshotWrapBody(formatBytes(meta.bytes)))}</p>`,
               okLabel: t().snapshotWrapOk,
               cancelLabel: t().snapshotWrapCancel,
             })
@@ -176,7 +174,7 @@ export function createSnapshotPane(deps: SnapshotPaneDeps): { el: HTMLElement; r
       if (kind === 'rename') {
         const next = await promptDialog({
           title: t().snapshotRenameTitle,
-          body: `<p>${t().snapshotRenameHint}</p>`,
+          body: `<p>${escapeHtml(t().snapshotRenameHint)}</p>`,
           value: meta.label,
           okLabel: t().actionRename,
           cancelLabel: t().cancelAction,
@@ -215,9 +213,9 @@ export function createSnapshotPane(deps: SnapshotPaneDeps): { el: HTMLElement; r
       const auto = rows.filter(row => row.kind === 'auto');
       const manual = rows.filter(row => row.kind === 'manual');
 
-      // 自动槽固定三个：空位也占一行，一眼看出回滚点还剩几层
+      // 自动槽数量固定：空位也占一行，一眼看出回滚点还剩几层
       const slots: HTMLElement[] = [];
-      for (let index = 0; index < AUTO_SLOTS; index++) {
+      for (let index = 0; index < AUTO_KEEP; index++) {
         const meta = auto[index];
         slots.push(meta ? rowOf(meta, t().autoSlot(index + 1)) : emptyRow());
       }

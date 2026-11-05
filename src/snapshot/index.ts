@@ -1,7 +1,7 @@
 import { messageError } from '../core/error';
 import type { Item, ScanResult } from '../core/item';
 import { throwIfAborted } from '../core/error';
-import { formatCompactStamp } from '../core/format';
+import { byteLengthOf, formatCompactStamp } from '../core/format';
 import type { Manifest } from '../core/manifest';
 import type { Progress } from '../core/progress';
 import { storageEstimate } from '../host/env';
@@ -186,10 +186,6 @@ export interface LoadedSnapshot {
   meta: SnapshotMeta;
 }
 
-export function sizeOfPayload(payload: Uint8Array | Blob): number {
-  return payload instanceof Uint8Array ? payload.byteLength : payload.size;
-}
-
 export async function bytesOfPayload(payload: Uint8Array | Blob): Promise<Uint8Array> {
   return payload instanceof Uint8Array ? payload : new Uint8Array(await payload.arrayBuffer());
 }
@@ -198,7 +194,7 @@ export async function bytesOfPayload(payload: Uint8Array | Blob): Promise<Uint8A
 export async function loadSnapshot(id: number): Promise<LoadedSnapshot | null> {
   const payload = await getPayload(id);
   if (!payload) return null;
-  const size = sizeOfPayload(payload);
+  const size = byteLengthOf(payload);
   const bundle = await openBundle(payload);
   const stored = await getSnapshotMeta(id);
   if (!stored) {

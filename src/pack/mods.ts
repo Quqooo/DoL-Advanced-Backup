@@ -71,34 +71,32 @@ export async function planMods(
   for (const [index, name] of names.entries()) {
     const found = await readMod(reader, name, injected);
     if (!found) throw messageError('packSelectionMissing', name);
-    if (found) {
-      const sha256 = await sha256Hex(found.bytes);
-      const boot = await readBoot(found.bytes);
-      const known = byHash.get(sha256);
-      // 同一份字节被多个存储名引用时只算一次 CRC：大模组包重算一遍不值
-      const crc = known ? known.crc32 : hex32(crc32(found.bytes));
-      // 容器格式进文件名：ModPack 用 .modpack，其余用 .zip，一眼能分开
-      const ext = isModPack(found.bytes) ? '.modpack' : '.zip';
-      // 读不出名字的包（坏包）使用存储名，避免文件名只剩哈希
-      const file = known?.file ?? `mods/${uniqueFileName(boot.name ?? name, sha256, used, ext)}`;
-      if (!known) {
-        byHash.set(sha256, { file, crc32: crc });
-        plans.push({ stored: name, file, bytes: found.bytes.length, sha256 });
-      }
-      items.push({
-        name: boot.name ?? name.replace(/\.(modpack|zip)$/i, ''),
-        ...(boot.version ? { version: boot.version } : {}),
-        ...(boot.nickName ? { nick: boot.nickName } : {}),
-        file,
-        stored: name,
-        sha256,
-        bytes: found.bytes.length,
-        // 与中央目录里的 CRC 对照：恢复页不解压模组包就能发现错配
-        crc32: crc,
-        origin: found.origin,
-        ...(found.shadow ? { shadow: 'localstorage' as const } : {}),
-      });
+    const sha256 = await sha256Hex(found.bytes);
+    const boot = await readBoot(found.bytes);
+    const known = byHash.get(sha256);
+    // 同一份字节被多个存储名引用时只算一次 CRC：大模组包重算一遍不值
+    const crc = known ? known.crc32 : hex32(crc32(found.bytes));
+    // 容器格式进文件名：ModPack 用 .modpack，其余用 .zip，一眼能分开
+    const ext = isModPack(found.bytes) ? '.modpack' : '.zip';
+    // 读不出名字的包（坏包）使用存储名，避免文件名只剩哈希
+    const file = known?.file ?? `mods/${uniqueFileName(boot.name ?? name, sha256, used, ext)}`;
+    if (!known) {
+      byHash.set(sha256, { file, crc32: crc });
+      plans.push({ stored: name, file, bytes: found.bytes.length, sha256 });
     }
+    items.push({
+      name: boot.name ?? name.replace(/\.(modpack|zip)$/i, ''),
+      ...(boot.version ? { version: boot.version } : {}),
+      ...(boot.nickName ? { nick: boot.nickName } : {}),
+      file,
+      stored: name,
+      sha256,
+      bytes: found.bytes.length,
+      // 与中央目录里的 CRC 对照：恢复页不解压模组包就能发现错配
+      crc32: crc,
+      origin: found.origin,
+      ...(found.shadow ? { shadow: 'localstorage' as const } : {}),
+    });
     if (names.length > 0) onProgress?.((index + 1) / names.length);
   }
 

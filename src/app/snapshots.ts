@@ -1,7 +1,7 @@
 import type { RestoreMode } from '../core/types';
 import { messageError } from '../core/error';
 import type { Progress } from '../core/progress';
-import { bytesToBase64 } from '../core/format';
+import { byteLengthOf, bytesToBase64 } from '../core/format';
 import { RESTORE_MOD_NAME, SELF_PACK_INNER } from '../core/constants';
 import { writeModPackTo } from '../core/modpack';
 import type { ByteSink } from '../core/sink';
@@ -17,7 +17,6 @@ import {
   loadSnapshot,
   bytesOfPayload,
   renameSnapshot,
-  sizeOfPayload,
   snapshotFileName,
   type SnapshotMeta,
 } from '../snapshot';
@@ -156,12 +155,12 @@ export async function snapshotExport(
         stream,
         [
           ...selfFiles(script, VERSION),
-          { name: SELF_PACK_INNER, length: sizeOfPayload(payload), write: target => copyPayload(payload, target) },
+          { name: SELF_PACK_INNER, length: byteLengthOf(payload), write: target => copyPayload(payload, target) },
         ],
         RESTORE_MOD_NAME,
       );
     } else {
-      bytes = sizeOfPayload(payload);
+      bytes = byteLengthOf(payload);
       await copyPayload(payload, stream);
     }
     await stream.close(name);

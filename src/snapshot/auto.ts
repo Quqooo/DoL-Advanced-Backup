@@ -2,8 +2,9 @@ import type { ScanResult } from '../core/item';
 import { messageError } from '../core/error';
 import { deleteSnapshot, listSnapshots } from '../store/snapshots';
 import { createSnapshot, incompleteGroups, type SnapshotMeta } from './index';
+import { AUTO_KEEP } from '../core/constants';
 
-export const AUTO_KEEP = 3;
+export { AUTO_KEEP } from '../core/constants';
 
 export interface AutoSnapshotInput {
   scanned: ScanResult;
