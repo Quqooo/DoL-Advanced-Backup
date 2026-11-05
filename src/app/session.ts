@@ -16,3 +16,10 @@ export function session(): SessionState {
 export function resetScan(): void {
   state.scan = null;
 }
+
+export const SCAN_MAX_AGE_MS = 5 * 60 * 1000;
+
+/** 以整轮扫描完成时间判断；读取缓存或单组重试都不延长时效。 */
+export function scanExpired(result: Pick<ScanResult, 'at'>, now = Date.now()): boolean {
+  return now - result.at > SCAN_MAX_AGE_MS;
+}

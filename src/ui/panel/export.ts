@@ -1,12 +1,12 @@
 import { exportPackage } from '../../app/export';
 import { measureItem, retryCollector, scan, scanBusy, watchScan } from '../../app/scan';
-import { resetScan, session } from '../../app/session';
+import { resetScan, SCAN_MAX_AGE_MS, scanExpired, session } from '../../app/session';
 import { formatBytes, formatTotal } from '../../core/format';
 import { measureFallback, type Item, type ScanResult } from '../../core/item';
 import type { Prefs } from '../../core/types';
 import { idbEngineActive, patchPrefs, readPrefs } from '../../app/prefs';
 import { probeWasm } from '../../host/env';
-import { t } from '../i18n';
+import { currentLang, t } from '../i18n';
 import { describeError } from '../error-text';
 import { dom } from './dom';
 import { createNotices, toast } from './feedback';
@@ -168,6 +168,8 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
 
   const progress = createProgress();
   const notices = createNotices();
+  const scanNotice = createNotices();
+  let freshnessTimer = 0;
 
   /** 正在采集：树里是上一轮的结果，这时导出会拿到半新半旧的地址表 */
   let scanning = false;
@@ -221,18 +223,28 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
   }
 
   function renderSummary(): void {
-    if (!current) return;
+    window.clearTimeout(freshnessTimer);
+    if (!current || scanning) return;
     const totals = current.items.map(item => item.bytes);
     const estimated = current.items.some(item => item.sizeState === 'estimate');
-    note.textContent = current.items.length > 0
+    const summary = current.items.length > 0
       ? t().summary(current.items.length, formatTotal(totals, estimated))
       : t().empty;
+    const time = new Date(current.at).toLocaleString(currentLang() === 'zh' ? 'zh-CN' : 'en-US');
+    const expired = scanExpired(current);
+    note.textContent = `${summary} · ${t().scanCompleted(time)}${expired ? ` · ${t().scanExpired}` : ''}`;
+    if (!expired) {
+      freshnessTimer = window.setTimeout(() => {
+        if (el.isConnected) renderSummary();
+      }, Math.max(1, current.at + SCAN_MAX_AGE_MS + 1 - Date.now()));
+    }
   }
 
   function apply(result: ScanResult): void {
     current = result;
     // 收尾：移除本轮未再出现的条目，更新变化的行；未变化的行保持原样
     tree.setItems(result.items);
+    if (!scanExpired(result)) scanNotice.clear();
     renderSummary();
     renderErrors(result);
   }
@@ -283,6 +295,7 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
     tree.setIdbActive(idbEngineActive());
     tree.refresh();
     scanning = true;
+    window.clearTimeout(freshnessTimer);
     syncLocked();
     noteRow.dataset.advbkScan = 'loading';
     let found = 0;
@@ -329,6 +342,9 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
     const release = gate.take('export');
     if (!release) return;
     notices.clear();
+    renderSummary();
+    // 同步提示后直接打开保存选择器，保留这次点击的用户手势与原勾选集合。
+    if (current && scanExpired(current)) scanNotice.show('warn', t().exportScanExpired);
     const signal = progress.begin();
     progress.update(t().exporting, 0);
     void exportPackage({
@@ -350,7 +366,7 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
       });
   });
 
-  el.append(noteRow, tree.el, errors, optionsSection, progress.el, notices.el, actions);
+  el.append(noteRow, tree.el, errors, optionsSection, progress.el, notices.el, scanNotice.el, actions);
   actions.append(exporter);
   // 会话里还留着扫描结果就直接画出来。重建面板（换语言）时缓存不为空，
   // `refreshIfStale` 据此不会重扫，新面板就会一直停在「读取中…」——这里补上。
@@ -363,6 +379,7 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
     refreshIfStale: () => {
       // 切回这一页时重新对一次锁：别的分页的扫描可能已经开始或结束
       syncLocked();
+      renderSummary();
       // 任务在跑时不重扫：它正在读同一批库，等它结束后下一次切页再补
       if (gate.current() === null && session().scan === null) reload(true);
     },

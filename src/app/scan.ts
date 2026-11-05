@@ -116,7 +116,8 @@ export async function retryCollector(name: string): Promise<ScanResult> {
   const claims = { ...prev.claims };
   delete claims[name];
   const next: ScanResult = {
-    at: Date.now(),
+    // 只更新这一组，其他组仍来自上一轮整扫，不能把整份缓存的时间刷新。
+    at: prev.at,
     items: prev.items.filter(item => item.collector !== name),
     errors: { ...prev.errors },
     claims,

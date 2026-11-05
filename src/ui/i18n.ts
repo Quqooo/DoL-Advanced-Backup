@@ -21,6 +21,9 @@ export interface Strings {
   /** 读包 / 扫描边收边报：已经找到多少条 */
   readingFound: (count: number) => string;
   scanning: (count: number) => string;
+  scanCompleted: (time: string) => string;
+  scanExpired: string;
+  exportScanExpired: string;
   imported: (applied: number, skipped: number, failed: number) => string;
   /** 恢复报告里的失败明细：一条一行，悬停看全 */
   importFailures: (lines: readonly string[]) => string;
@@ -272,6 +275,9 @@ const ZH: Strings = {
   reading: '读取包…',
   readingFound: count => `读取包… 已找到 ${count} 项`,
   scanning: count => `正在扫描… 已找到 ${count} 项`,
+  scanCompleted: time => `扫描完成于 ${time}`,
+  scanExpired: '扫描已超过 5 分钟，数据可能已变化，建议重新扫描',
+  exportScanExpired: '扫描已超过 5 分钟，数据可能已变化。本次继续导出当前勾选的集合，扫描后新增的条目不会自动纳入；建议重新扫描后再导出。',
   imported: (applied, skipped, failed) => `已恢复 ${applied} 项 · 跳过 ${skipped} · 失败 ${failed}`,
   importFailures: lines =>
     `失败 ${lines.length} 项：${lines.slice(0, 3).join('；')}${lines.length > 3 ? ` …（共 ${lines.length} 项）` : ''}`,
@@ -641,6 +647,9 @@ const EN: Strings = {
   reading: 'Reading package…',
   readingFound: count => `Reading package… ${count} items found`,
   scanning: count => `Scanning… ${count} items found`,
+  scanCompleted: time => `Scan completed at ${time}`,
+  scanExpired: 'Scan is over 5 minutes old; data may have changed. Rescan recommended',
+  exportScanExpired: 'Scan is over 5 minutes old; data may have changed. Continuing with the currently selected set; items added since the scan are not included automatically. Rescan before exporting for an updated list.',
   imported: (applied, skipped, failed) => `Restored ${applied} · skipped ${skipped} · failed ${failed}`,
   importFailures: lines =>
     `${lines.length} failed: ${lines.slice(0, 3).join('; ')}${lines.length > 3 ? ` … (${lines.length} total)` : ''}`,
