@@ -191,4 +191,12 @@ export const MAPPING: readonly MappingEntry[] = [
     label: 'mapWovenRealmUi',
     dbs: [{ match: 'WovenRealmUIAddonAssets', badge: 'badgeFurniture' }],
   },
+  {
+    // 作者把版本号写进 boot.json 的 name（`v1-自定义npc模型`），别名才是跨版本的稳定标识；
+    // 分组第二行显示的仍是实际装的那份的 name。配置一个键，模型图片按 id 存进自建库
+    mod: 'customNpcModel',
+    label: 'mapNpcModel',
+    keys: [{ match: 'NPCModel_cfg_v2', badge: 'badgeSettings' }],
+    dbs: [{ match: 'NPCModelDB', badge: 'badgeNpcModels' }],
+  },
 ];

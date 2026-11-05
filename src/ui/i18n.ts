@@ -220,6 +220,7 @@ export interface Strings {
   badgeConfigMemory: string;
   badgeImageCache: string;
   badgeFurniture: string;
+  badgeNpcModels: string;
   /** 内置映射表的显示名：条目 `label` 写这些键，查不到就显示键本身 */
   mapAdvbk: string;
   mapHotkeys: string;
@@ -239,6 +240,7 @@ export interface Strings {
   mapDoLChat: string;
   mapWovenRealm: string;
   mapWovenRealmUi: string;
+  mapNpcModel: string;
   summary: (count: number, size: string) => string;
   failed: (message: string) => string;
   items: (count: number) => string;
@@ -486,6 +488,7 @@ const ZH: Strings = {
   badgeConfigMemory: '设置与记忆',
   badgeImageCache: '插画缓存',
   badgeFurniture: '家具素材',
+  badgeNpcModels: 'NPC 模型',
   mapAdvbk: '高级备份',
   mapHotkeys: '通用快捷键',
   mapMaplebirch: '枫桦框架',
@@ -504,6 +507,7 @@ const ZH: Strings = {
   mapDoLChat: 'DoLChat 剧情',
   mapWovenRealm: '织境空间',
   mapWovenRealmUi: '织境空间·场景界面扩展',
+  mapNpcModel: '自定义 NPC 模型',
   summary: (count, size) => `${count} 项 · ${size}`,
   failed: message => `读取失败：${message}`,
   items: count => `${count} 项`,
@@ -853,6 +857,7 @@ const EN: Strings = {
   badgeConfigMemory: 'Settings & memory',
   badgeImageCache: 'Image cache',
   badgeFurniture: 'Furniture assets',
+  badgeNpcModels: 'NPC models',
   mapAdvbk: 'Advanced Backup',
   mapHotkeys: 'DoL Hotkeys',
   mapMaplebirch: 'Maple Birch',
@@ -871,6 +876,7 @@ const EN: Strings = {
   mapDoLChat: 'DoLChat',
   mapWovenRealm: 'Woven Realm',
   mapWovenRealmUi: 'Woven Realm Scene UI Addon',
+  mapNpcModel: 'Custom NPC Models',
   summary: (count, size) => `${count} items · ${size}`,
   failed: message => `Failed: ${message}`,
   items: count => `${count} items`,
