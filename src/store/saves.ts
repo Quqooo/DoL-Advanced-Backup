@@ -124,7 +124,8 @@ function saveTransaction(
   return new Promise((resolve, reject) => {
     const tx = db.transaction([SAVE_STORE, DETAIL_STORE], 'readwrite');
     tx.oncomplete = () => resolve();
-    tx.onerror = tx.onabort = () => reject(messageError('saveTransactionFailed'));
+    tx.onerror = () => reject(tx.error ?? messageError('saveTransactionFailed'));
+    tx.onabort = () => reject(tx.error ?? messageError('saveTransactionFailed'));
     try {
       fill(tx.objectStore(SAVE_STORE), tx.objectStore(DETAIL_STORE), tx, reject);
     } catch (error) {

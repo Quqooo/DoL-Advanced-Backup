@@ -76,7 +76,7 @@ function typeOf(value: BsonValue): number {
   if (value === null) return 0x0a;
   if (typeof value === 'boolean') return 0x08;
   if (typeof value === 'number') {
-    if (Number.isInteger(value) && Math.abs(value) < 0x7fffffff) return 0x10;
+    if (Number.isInteger(value) && value >= -0x80000000 && value <= 0x7fffffff) return 0x10;
     if (Number.isInteger(value)) {
       throw new Error(`BSON int32 写不下 ${value}，这个格式用不到大整数`);
     }
