@@ -1,3 +1,4 @@
+import { escapeHtml } from '../core/html';
 import { t } from '../ui/i18n';
 import { sugar } from './env';
 
@@ -49,15 +50,7 @@ function openDialog(title: string, markup: string): void {
   Dialog.open();
 }
 
-/** 属性值转义：输入框的初值与占位符是调用方给的可变文本，直接拼会把标签截断 */
-function escapeAttr(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+const escapeAttr = escapeHtml;
 
 /**
  * 带答案按钮的对话框骨架：只结算一次，按被点按钮的 `data-advbk-answer` 取值。
@@ -114,9 +107,9 @@ function answerDialog<T>(options: {
 /** 多选一：返回所选 value；ESC / 遮罩 / 取消按钮都返回 null */
 export function chooseDialog(options: ChooseOptions): Promise<string | null> {
   const buttons = options.choices
-    .map(choice => `<button type="button" class="link-internal macro-button" data-advbk-answer="${escapeAttr(choice.value)}">${choice.label}</button>`)
+    .map(choice => `<button type="button" class="link-internal macro-button" data-advbk-answer="${escapeAttr(choice.value)}">${escapeHtml(choice.label)}</button>`)
     .join('');
-  const cancelLabel = options.cancelLabel ?? t().cancelAction;
+  const cancelLabel = escapeHtml(options.cancelLabel ?? t().cancelAction);
   const body = `${options.body}<div class="advbk-dialog-actions">
     <button type="button" class="link-internal macro-button" data-advbk-answer="">${cancelLabel}</button>
     ${buttons}
@@ -142,11 +135,13 @@ export async function confirmDialog(options: ConfirmOptions): Promise<boolean> {
 
 /** 单行输入：确认返回文本（已 trim），取消返回 null。不用 window.prompt */
 export function promptDialog(options: PromptOptions): Promise<string | null> {
+  const cancelLabel = escapeHtml(options.cancelLabel ?? t().cancelAction);
+  const okLabel = escapeHtml(options.okLabel ?? t().okAction);
   const body = `${options.body}<p><input type="text" class="advbk-input" data-advbk-input
     value="${escapeAttr(options.value ?? '')}" placeholder="${escapeAttr(options.placeholder ?? '')}"></p>
     <div class="advbk-dialog-actions">
-      <button type="button" class="link-internal macro-button" data-advbk-answer="">${options.cancelLabel ?? t().cancelAction}</button>
-      <button type="button" class="link-internal macro-button" data-advbk-answer="ok">${options.okLabel ?? t().okAction}</button>
+      <button type="button" class="link-internal macro-button" data-advbk-answer="">${cancelLabel}</button>
+      <button type="button" class="link-internal macro-button" data-advbk-answer="ok">${okLabel}</button>
     </div>`;
 
   return answerDialog<string>({

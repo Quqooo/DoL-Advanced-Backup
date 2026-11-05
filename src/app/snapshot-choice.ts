@@ -1,3 +1,4 @@
+import { escapeHtml } from '../core/html';
 import { chooseDialog } from '../host/dialog';
 import { t } from '../ui/i18n';
 
@@ -14,7 +15,7 @@ export async function askSkipUnsupported(error: unknown): Promise<boolean> {
   const path = String(info.params?.[1] ?? '');
   const answer = await chooseDialog({
     title: t().snapshotUnsupportedTitle,
-    body: t().snapshotUnsupportedBody(type, path),
+    body: escapeHtml(t().snapshotUnsupportedBody(type, path)),
     choices: [{ value: 'skip', label: t().snapshotUnsupportedSkip }],
     cancelLabel: t().snapshotUnsupportedAbort,
   });

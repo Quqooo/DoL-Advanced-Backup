@@ -34,24 +34,16 @@ export function mergeFeats(
   const out: Record<string, unknown> = { ...local };
 
   for (const [key, value] of Object.entries(incoming)) {
-    const current = out[key];
-    if (current === undefined) {
-      out[key] = value;
-      continue;
-    }
+    const current = Object.prototype.hasOwnProperty.call(out, key) ? out[key] : undefined;
+    let merged = value;
     if (Array.isArray(current) && Array.isArray(value)) {
-      out[key] = unionArray(current, value);
-      continue;
+      merged = unionArray(current, value);
+    } else if (typeof current === 'number' && typeof value === 'number') {
+      merged = Math.max(current, value);
+    } else if (isDateString(current) && isDateString(value)) {
+      merged = value < current ? value : current;
     }
-    if (typeof current === 'number' && typeof value === 'number') {
-      out[key] = Math.max(current, value);
-      continue;
-    }
-    if (isDateString(current) && isDateString(value)) {
-      out[key] = value < current ? value : current;
-      continue;
-    }
-    out[key] = value;
+    Object.defineProperty(out, key, { value: merged, writable: true, enumerable: true, configurable: true });
   }
 
   return out;
