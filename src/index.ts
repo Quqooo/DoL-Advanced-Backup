@@ -18,7 +18,7 @@ import {
 import { list as mappingList, register as registerMapping } from './core/mapping';
 import type { RestoreMode } from './core/types';
 import { onModLoaderLoadEnd } from './host/modloader';
-import { installTab, openPanel } from './host/overlay';
+import { enterTab, installTab, openPanel } from './host/overlay';
 import { isRestorePack, selfMod, selfProbe } from './host/self';
 import { runRestorePack } from './ui/boot';
 import { failureLines } from './ui/error-text';
@@ -67,6 +67,7 @@ if (isRestorePack(self)) {
     api: 1,
     version: VERSION,
     open: openPanel,
+    enterTab,
     export: exportPackage,
     import: async (request: unknown) => apiResult(await importPackage(request as ImportRequest)),
     mapping: {

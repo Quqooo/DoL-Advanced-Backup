@@ -15,6 +15,7 @@ const boot = {
   version: VERSION,
   styleFileList: ['advanced-backup.css'],
   scriptFileList: ['advanced-backup.js'],
+  scriptFileList_preload: ['advanced-backup-preload.js'],
   tweeFileList: [],
   imgFileList: [],
   additionFile: [],
@@ -45,6 +46,20 @@ for (const entry of await readdir(dist, { withFileTypes: true })) {
 }
 
 await build({ ...shared, entryPoints: [path.join(root, 'src/index.ts')], outfile: path.join(dist, 'advanced-backup.js') });
+// preload 由 ModLoader 以「第一行必须是自执行函数」的约定加载，不能带 banner 和 use strict
+await build({
+  ...shared,
+  banner: undefined,
+  minify: false,
+  plugins: [],
+  entryPoints: [path.join(root, 'src/preload.ts')],
+  outfile: path.join(dist, 'advanced-backup-preload.js'),
+});
+{
+  const file = path.join(dist, 'advanced-backup-preload.js');
+  const code = await readFile(file, 'utf8');
+  await writeFile(file, code.replace(/^"use strict";\r?\n/, ''), 'utf8');
+}
 await copyFile(path.join(root, 'assets/advanced-backup.css'), path.join(dist, 'advanced-backup.css'));
 await writeFile(path.join(dist, 'boot.json'), `${JSON.stringify(boot, null, 2)}\n`, 'utf8');
 

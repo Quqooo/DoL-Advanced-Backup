@@ -42,6 +42,8 @@ interface Window {
     api: number;
     version: string;
     open(): void;
+    /** 由 `titleSaves` 里的分页按钮调用，挂载或切回面板 */
+    enterTab(): void;
     export(request?: unknown): Promise<{ name: string; bytes: number; entries: number; method: string }>;
     import(request: unknown): Promise<AdvancedBackupResult>;
     mapping: {

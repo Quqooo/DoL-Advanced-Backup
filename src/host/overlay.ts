@@ -6,7 +6,8 @@ type Renderer = () => HTMLElement;
 type EnterHook = () => void;
 
 const OVERLAY = 'saves';
-const ATTR = 'data-advbk-tab';
+/** preload 写进 `titleSaves` 的标记，落在按钮内层的 span 上 */
+const MARK = 'span[data-advbk-tab]';
 const HOST_CLASS = 'advbk-host';
 
 let render: Renderer | null = null;
@@ -15,21 +16,15 @@ let tabEl: HTMLButtonElement | null = null;
 let tabBar: HTMLElement | null = null;
 let panelEl: HTMLElement | null = null;
 let panelHost: HTMLElement | null = null;
-let observer: MutationObserver | null = null;
-let pendingScan = false;
 let contentWatch: MutationObserver | null = null;
 /** 用户确实切走过（点了别的分页，或覆盖层被关掉）；只点自己那一下不算 */
 let away = false;
 let watchedContent: HTMLElement | null = null;
 /** 原版内容被挪进这里；只藏不删 */
 let shim: HTMLElement | null = null;
-
-/** 游戏在 setupTabs 里缓存了分页按钮列表，补了按钮要让它重新收一遍 */
-function refreshTabCollection(): void {
-  const api = stateTemp()?.tab;
-  if (!api || !window.jQuery) return;
-  api.tabs = window.jQuery('#overlayTabs').find('button');
-}
+let listening = false;
+/** 每次进入或切走都递增：用来作废排队中的高亮确认 */
+let epoch = 0;
 
 /**
  * 原版分页会把文字**直接**写进容器（裸文本节点），给子元素设 `hidden` 拦不住它；
@@ -40,6 +35,9 @@ function refreshTabCollection(): void {
 function hideForeign(content: HTMLElement): void {
   const foreign = [...content.childNodes].filter(node => node !== panelHost && node !== shim);
   if (foreign.length === 0) return;
+  // 覆盖层重建时旧的隐藏容器会随之移除，里面的节点已经作废；
+  // 继续往里塞会把新内容接到游离节点上，插回来后看起来是空白。
+  if (shim && !shim.isConnected) shim = null;
   if (!shim) {
     shim = document.createElement('div');
     shim.className = 'advbk-original';
@@ -102,16 +100,46 @@ export function rebuildPanel(): void {
   }
 }
 
-function activate(): void {
-  const content = document.getElementById('customOverlayContent');
-  if (!tabBar || !content || !tabEl) return;
-  const buttons = [...tabBar.querySelectorAll('button')];
-  for (const node of buttons) node.classList.toggle('tab-selected', node === tabEl);
+/**
+ * `setupTabs` 把集合赋值排在 jQuery ready 回调里，脚本紧接着发起点击时 `T.tab.tabs`
+ * 还是 undefined，`<<toggleTab>>` 会在这里抛错。点之前先把集合填好，结果与稍后的
+ * 回调一致（同一个选择器）。
+ */
+function refreshTabCollection(): void {
   const api = stateTemp()?.tab;
-  if (api) {
-    refreshTabCollection();
-    api.activeTab = buttons.indexOf(tabEl);
+  if (!api || !window.jQuery) return;
+  api.tabs = window.jQuery('#overlayTabs').find('button');
+}
+
+/** 分页按钮由 preload 插入，标记落在内层 span 上 */
+function findTab(bar: HTMLElement): HTMLButtonElement | null {
+  const mark = bar.querySelector<HTMLElement>(MARK);
+  return mark ? (mark.closest('button') as HTMLButtonElement | null) : null;
+}
+
+/** 把当前文案写进 `setup`，存档分页渲染时直接取用，不会先出占位文案再被改掉 */
+function publishLabel(): void {
+  const setup = (window as unknown as { setup?: Record<string, unknown> }).setup;
+  if (!setup) return;
+  const label = t().tab;
+  if (setup.AdvbkTab !== label) setup.AdvbkTab = label;
+}
+
+/**
+ * 点「备份」分页时由 `titleSaves` 里的 `<<run>>` 调用。
+ *
+ * 不走 `<<replace #customOverlayContent>>`：那会先清空容器，毁掉原版存档列表
+ * 还没写完的节点。这里只把原版节点挪进隐藏容器，再挂自己的面板。
+ */
+export function enterTab(): void {
+  const content = document.getElementById('customOverlayContent');
+  if (!content) return;
+  const bar = document.getElementById('overlayTabs');
+  if (bar) {
+    tabBar = bar;
+    tabEl = findTab(bar);
   }
+  publishLabel();
   hideForeign(content);
   // 上一个分页的内容是异步渲染的，可能在我们切过来之后才落进容器，得一直盯着
   watchContent(content);
@@ -127,27 +155,28 @@ function activate(): void {
   panelHost.hidden = false;
   content.scrollTop = 0;
   window.jQuery?.(content).scrollTop(0);
+  // `setupTabs` 把默认选中排在 jQuery ready 回调里，可能晚于这次点击执行，
+  // 把高亮改回原版分页。等这一轮回调跑完再确认一次；期间用户切走则作废。
+  const mine = ++epoch;
+  window.setTimeout(() => {
+    if (mine !== epoch || !tabEl || !tabBar) return;
+    for (const node of tabBar.querySelectorAll('button')) {
+      node.classList.toggle('tab-selected', node === tabEl);
+    }
+  }, 0);
   if (!first && away) onEnter?.();
   away = false;
 }
 
-/** 点回原版分页时取消本页高亮，避免两个分页同时处于选中态 */
+/** 点回原版分页时停手：再盯着容器就会把原版新渲染的内容也藏起来 */
 function onDocumentClick(event: MouseEvent): void {
-  if (!tabEl) return;
+  if (!tabEl || !tabBar) return;
   const target = event.target as Element | null;
   if (!target || tabEl.contains(target)) return;
-  const bar = tabEl.parentElement;
-  if (!bar || !bar.contains(target) || !target.closest('button')) return;
-  tabEl.classList.remove('tab-selected');
+  if (!tabBar.contains(target) || !target.closest('button')) return;
   away = true;
-  // 交给原版分页了：再盯着容器就会把它的内容也藏起来
+  epoch++;
   stopWatching();
-}
-
-function updateLabel(): void {
-  if (!tabEl) return;
-  const label = t().tab;
-  if (tabEl.textContent !== label) tabEl.textContent = label;
 }
 
 export function ensureTab(): void {
@@ -165,40 +194,26 @@ export function ensureTab(): void {
     tabBar = bar;
     invalidateLang();
   }
-  const existing = bar.querySelector<HTMLButtonElement>(`button[${ATTR}]`);
-  if (existing) {
-    tabEl = existing;
-    updateLabel();
-    return;
-  }
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.setAttribute(ATTR, '1');
-  // 与 <<button>> 生成的分页同款 class，样式与悬停效果直接复用原版
-  button.className = 'link-internal macro-button';
-  button.textContent = t().tab;
-  button.addEventListener('click', activate);
-  bar.appendChild(button);
-  tabEl = button;
-  refreshTabCollection();
+  tabEl = findTab(bar);
+  publishLabel();
 }
 
 export function installTab(renderer: Renderer, enter?: EnterHook): void {
   render = renderer;
   onEnter = enter ?? null;
-  if (!observer) {
-    // 覆盖层会随段落一起重建，不能按目标节点过滤
-    observer = new MutationObserver(() => {
-      if (pendingScan) return;
-      pendingScan = true;
-      setTimeout(() => {
-        pendingScan = false;
-        ensureTab();
-      }, 0);
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
+  if (!listening) {
     document.addEventListener('click', onDocumentClick, true);
+    // 关闭覆盖层时停手：否则下次打开时，原版分页刚渲染的内容会被当成外来节点藏起来
+    window.jQuery?.(document).on(':oncloseoverlay', () => {
+      epoch++;
+      away = true;
+      tabEl = null;
+      tabBar = null;
+      stopWatching();
+    });
+    listening = true;
   }
+  publishLabel();
   ensureTab();
 }
 
@@ -217,9 +232,9 @@ export function openPanel(): void {
   let attempts = 0;
   const focus = (): void => {
     ensureTab();
-    const tab = document.querySelector<HTMLButtonElement>(`#overlayTabs button[${ATTR}]`);
-    if (tab) {
-      tab.click();
+    if (tabEl) {
+      refreshTabCollection();
+      tabEl.click();
       return;
     }
     attempts++;
