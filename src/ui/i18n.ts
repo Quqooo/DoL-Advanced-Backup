@@ -1047,21 +1047,20 @@ export function detectLang(): Lang {
     cached = 'zh';
     return cached;
   }
-  let han = 0;
-  for (const selector of PROBES) {
-    const text = document.querySelector(selector)?.textContent ?? '';
-    han += (text.match(HAN) ?? []).length;
-    if (han >= HAN_THRESHOLD) {
-      cached = 'zh';
-      return cached;
-    }
-  }
-  if (han === 0) {
-    const nav = typeof navigator === 'undefined' ? '' : navigator.language ?? '';
-    cached = /^zh/i.test(nav) ? 'zh' : 'en';
+  let text = '';
+  for (const selector of PROBES) text += document.querySelector(selector)?.textContent ?? '';
+  const han = (text.match(HAN) ?? []).length;
+  if (han >= HAN_THRESHOLD) {
+    cached = 'zh';
     return cached;
   }
-  cached = 'en';
+  // 正文有字但没有足够的汉字：英文版（少量汉字可能是玩家名或残留翻译）
+  if (text.trim().length > 0) {
+    cached = 'en';
+    return cached;
+  }
+  const nav = typeof navigator === 'undefined' ? '' : navigator.language ?? '';
+  cached = /^zh/i.test(nav) ? 'zh' : 'en';
   return cached;
 }
 
