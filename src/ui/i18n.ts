@@ -1020,7 +1020,10 @@ const EN: Strings = {
   },
 };
 
-const HAN = /[\u3400-\u4dbf\u4e00-\u9fff]/;
+const HAN = /[\u3400-\u4dbf\u4e00-\u9fff]/g;
+/** 只看游戏正文：`document.body` 里还有内联脚本，按整页文本判会把英文版也判成中文 */
+const PROBES = ['#passages', '#story-caption'];
+const HAN_THRESHOLD = 10;
 
 let cached: Lang | null = null;
 /** 偏好强制的那一种；`null` 表示跟随页面文本 */
@@ -1031,7 +1034,12 @@ export function setLangPref(value: LangPref): void {
   override = value === 'auto' ? null : value;
 }
 
-/** 语言按整页文本判定：开局页字数太少，只看 #passages 会把中文误判成英文 */
+/**
+ * 按游戏正文里的汉字数判定。
+ *
+ * 脚本可能早于正文渲染执行，这时两个选择器都还没有文本：先按浏览器语言，
+ * `:storyready` 之后调用方会重新探一次。
+ */
 export function detectLang(): Lang {
   if (cached) return cached;
   // 单测在 Node 里跑：没有 document 就按中文，别让词条查询把纯逻辑测试拽下水
@@ -1039,12 +1047,21 @@ export function detectLang(): Lang {
     cached = 'zh';
     return cached;
   }
-  const text = document.body?.textContent ?? '';
   let han = 0;
-  for (const char of text) {
-    if (HAN.test(char) && ++han >= 20) break;
+  for (const selector of PROBES) {
+    const text = document.querySelector(selector)?.textContent ?? '';
+    han += (text.match(HAN) ?? []).length;
+    if (han >= HAN_THRESHOLD) {
+      cached = 'zh';
+      return cached;
+    }
   }
-  cached = han >= 20 ? 'zh' : 'en';
+  if (han === 0) {
+    const nav = typeof navigator === 'undefined' ? '' : navigator.language ?? '';
+    cached = /^zh/i.test(nav) ? 'zh' : 'en';
+    return cached;
+  }
+  cached = 'en';
   return cached;
 }
 
@@ -1072,8 +1089,7 @@ export function tText(name: string): string {
 }
 
 /**
- * 启动对话框的语言：那时候游戏正文还没渲染，`currentLang()` 的汉字计数必然判成英文，
- * 只能看浏览器语言。
+ * 启动对话框的语言：那时正文还没渲染，探不到汉字，只能看浏览器语言。
  */
 export function tBoot(): Strings {
   if (override) return override === 'zh' ? ZH : EN;

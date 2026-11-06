@@ -7,7 +7,7 @@ import { t, type Strings } from './i18n';
  * 只有 `MessageError` 带词条键；其余按 `messageOf` 原样显示。未预期的异常与内部格式断言
  * 没有对应词条，转换会丢失原始信息。
  *
- * `strings` 只在启动阶段要显式传：那时页面还没文字，`currentLang()` 会把中文判成英文，
+ * `strings` 只在启动阶段要显式传：那时正文还没渲染，`currentLang()` 探不到汉字，
  * 恢复包对话框必须走 `tBoot()`。面板里的调用一律省略这个参数。
  */
 /**
