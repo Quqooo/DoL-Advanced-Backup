@@ -4,6 +4,8 @@ test-output/
 *.log
 docs/
 
+scripts/.git/
+scripts/.gitignore
 scripts/test/
 scripts/bench/
 scripts/bench-*.mjs
