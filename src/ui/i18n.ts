@@ -386,7 +386,7 @@ const ZH: Strings = {
   oversizeTitle: '导出可能失败',
   oversizeBody: (mb, limit) =>
     `<p>包体积为 ${mb} MB，超过安卓保存插件的安全上限（约 ${limit} MB）。整包导出很可能停在 0 字节，且无法取消。</p>`
-    + '<p>分卷导出会把它放进一个多卷 zip，每卷约 32 MB，逐卷保存；手动解压后即可得到原包。</p>',
+    + '<p>分卷导出会把它放进一个多卷 zip，每卷约 32 MB，逐卷保存；再手动解压分卷包后得到的原包才能用于恢复。</p>',
   oversizeSplit: '分卷导出',
   oversizeProceed: '整包导出',
   oversizeCancel: '取消导出',
@@ -640,6 +640,7 @@ const ZH: Strings = {
     modChangedDuringExport: name => `模组 ${name} 在导出过程中被改动，请重新导出`,
     androidNoSaveDialog: '这个安卓壳没有 save-dialog 插件，因此无法把文件写入设备',
     wasmUnavailable: 'WebAssembly 不可用（浏览器已禁用，或被页面策略阻止），因此无法写入 ModPack 容器。请取消勾选 ModPack 包装后重试。',
+    zstdUnavailable: '此设备无法运行 WebAssembly，ZSTD 压缩不可用；请改用标准压缩的包',
   },
 };
 
@@ -1017,6 +1018,7 @@ const EN: Strings = {
     modChangedDuringExport: name => `Mod ${name} changed while the pack was being written. Export again`,
     androidNoSaveDialog: 'This Android shell has no save-dialog plugin, so the file cannot be written to the device',
     wasmUnavailable: 'WebAssembly is unavailable (disabled by the browser, or blocked by page policy), so a ModPack container cannot be written. Clear ModPack wrap and retry.',
+    zstdUnavailable: 'This device cannot run WebAssembly, so ZSTD compression is unavailable. Use a pack with standard compression.',
   },
 };
 

@@ -1,5 +1,6 @@
 import { compress, decompress, init } from '@bokuweb/zstd-wasm';
 import { inflateSync } from 'fflate';
+import { messageError } from '../core/error';
 import { base64ToBytes } from '../core/format';
 import wasmBase64 from 'virtual:zstd-wasm';
 
@@ -18,7 +19,13 @@ const boot = init as unknown as (input: Uint8Array) => Promise<void>;
 
 function ensure(): Promise<void> {
   ready ??= (async () => {
-    await boot(inflateSync(base64ToBytes(wasmBase64)));
+    try {
+      await boot(inflateSync(base64ToBytes(wasmBase64)));
+    } catch (error) {
+      // 禁用 WebAssembly 的设备读不了也写不了 ZSTD 档，给一句能照做的提示
+      console.warn('[AdvancedBackup] ZSTD wasm 初始化失败', error);
+      throw messageError('zstdUnavailable');
+    }
   })();
   return ready;
 }
