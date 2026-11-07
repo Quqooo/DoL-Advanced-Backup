@@ -25,6 +25,8 @@ let shim: HTMLElement | null = null;
 let listening = false;
 /** 每次进入或切走都递增：用来作废排队中的高亮确认 */
 let epoch = 0;
+let overlayWatch: MutationObserver | null = null;
+let watchedOverlay: HTMLElement | null = null;
 
 /**
  * 原版分页会把文字**直接**写进容器（裸文本节点），给子元素设 `hidden` 拦不住它；
@@ -50,16 +52,35 @@ function hideForeign(content: HTMLElement): void {
 /** 交还原版分页前把节点移回原位，避免它的渲染回调操作已移走的节点 */
 function restoreForeign(content: HTMLElement): void {
   if (!shim) return;
+  // 覆盖层已经重建：隐藏容器跟着旧内容一起被移除，里面的节点直接丢掉；
+  // 拿脱离的 shim 当参考节点会抛 NotFoundError
+  if (shim.parentElement !== content) {
+    shim = null;
+    return;
+  }
   while (shim.firstChild) content.insertBefore(shim.firstChild, shim);
   shim.remove();
   shim = null;
+}
+
+/** 覆盖层是否仍停在存档页：切到别的页面会改 `data-overlay`，关闭会加 `hidden` */
+function isOwnOverlay(): boolean {
+  const overlay = document.getElementById('customOverlay');
+  return !!overlay && overlay.getAttribute('data-overlay') === OVERLAY && !overlay.classList.contains('hidden');
 }
 
 /** 原版内容可能在我们切过来之后才落进容器（`<<replace>>` 是异步的），得一直盯着 */
 function watchContent(content: HTMLElement): void {
   contentWatch?.disconnect();
   watchedContent = content;
-  contentWatch = new MutationObserver(() => hideForeign(content));
+  contentWatch = new MutationObserver(() => {
+    // 覆盖层已经换到别的页面：再藏就把新页面的原版内容也收走了
+    if (!isOwnOverlay()) {
+      leaveOverlay();
+      return;
+    }
+    hideForeign(content);
+  });
   contentWatch.observe(content, { childList: true });
 }
 
@@ -68,6 +89,34 @@ function stopWatching(): void {
   contentWatch = null;
   if (watchedContent) restoreForeign(watchedContent);
   watchedContent = null;
+}
+
+/** 覆盖层关闭或切走：停手并清掉分页引用，下次打开算重新进入 */
+function leaveOverlay(): void {
+  epoch++;
+  away = true;
+  tabEl = null;
+  tabBar = null;
+  stopWatching();
+}
+
+/**
+ * 老版本没有 `:oncloseoverlay`（0.4.2.7 实测没有），关闭时只给 `#customOverlay`
+ * 加 `hidden` 类。不补这条监听，关闭后观察器还在，下次打开会把刚渲染的原版内容
+ * 当成外来节点藏起来，所有原版分页都变成空白。
+ *
+ * `data-overlay` 同样要盯：从备份分页直接点侧栏的「选项」时覆盖层是切页不是关闭，
+ * 只看 `hidden` 会漏掉。
+ */
+function watchOverlayClose(): void {
+  const overlay = document.getElementById('customOverlay');
+  if (!overlay || overlay === watchedOverlay) return;
+  overlayWatch?.disconnect();
+  watchedOverlay = overlay;
+  overlayWatch = new MutationObserver(() => {
+    if (!isOwnOverlay()) leaveOverlay();
+  });
+  overlayWatch.observe(overlay, { attributes: true, attributeFilter: ['class', 'data-overlay'] });
 }
 
 /** 只建一次；之后再进来复用同一个节点，避免重建上千条列表 */
@@ -172,7 +221,13 @@ export function enterTab(): void {
 function onDocumentClick(event: MouseEvent): void {
   if (!tabEl || !tabBar) return;
   const target = event.target as Element | null;
-  if (!target || tabEl.contains(target)) return;
+  if (!target) return;
+  // 侧栏入口会换掉整个覆盖层：先停手，别把新页面刚渲染的原版内容藏起来
+  if (target.closest('#overlayButtons')) {
+    leaveOverlay();
+    return;
+  }
+  if (tabEl.contains(target)) return;
   if (!tabBar.contains(target) || !target.closest('button')) return;
   away = true;
   epoch++;
@@ -180,6 +235,7 @@ function onDocumentClick(event: MouseEvent): void {
 }
 
 export function ensureTab(): void {
+  watchOverlayClose();
   const bar = document.getElementById('overlayTabs');
   const key = document.getElementById('customOverlay')?.getAttribute('data-overlay') ?? '';
   if (!bar || key !== OVERLAY) {
@@ -201,16 +257,11 @@ export function ensureTab(): void {
 export function installTab(renderer: Renderer, enter?: EnterHook): void {
   render = renderer;
   onEnter = enter ?? null;
+  watchOverlayClose();
   if (!listening) {
     document.addEventListener('click', onDocumentClick, true);
-    // 关闭覆盖层时停手：否则下次打开时，原版分页刚渲染的内容会被当成外来节点藏起来
-    window.jQuery?.(document).on(':oncloseoverlay', () => {
-      epoch++;
-      away = true;
-      tabEl = null;
-      tabBar = null;
-      stopWatching();
-    });
+    // 覆盖层关闭时停手：否则下次打开时，原版分页刚渲染的内容会被当成外来节点藏起来
+    window.jQuery?.(document).on(':oncloseoverlay', leaveOverlay);
     listening = true;
   }
   publishLabel();
