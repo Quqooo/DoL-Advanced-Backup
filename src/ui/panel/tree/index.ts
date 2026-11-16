@@ -67,7 +67,6 @@ const SWEEP_MS = 2600;
 
 const PAGED_GROUPS = new Set(['saves/manual']);
 const SAVE_PAGE_SIZE = 10;
-const SAVE_MAX_PAGES = 20;
 
 /** 已挂载的一个节点；键在增量更新时用来认领同一个节点 */
 interface LeafEl {
@@ -494,7 +493,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
   }
 
   function pageCount(node: GroupNode): number {
-    return Math.min(SAVE_MAX_PAGES, Math.max(1, Math.ceil(node.children.length / SAVE_PAGE_SIZE)));
+    return Math.max(1, Math.ceil(node.children.length / SAVE_PAGE_SIZE));
   }
 
   function updateGroup(record: GroupEl, node: GroupNode): void {
