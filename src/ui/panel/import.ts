@@ -332,6 +332,13 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     const loaded = await snapshotSource(id);
     if (!sourceRun.current(run)) return;
     if (!loaded) {
+      // 选中的快照读不出来：来源与计划一起作废，否则「开始恢复」会执行上一份包
+      sourceRun.begin();
+      source = null;
+      plan = null;
+      snapshotSelect.value = '';
+      sourceNote.textContent = t().sourceNone;
+      renderPlan();
       notices.show('error', t().snapshotMissing);
       return;
     }

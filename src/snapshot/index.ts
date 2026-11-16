@@ -114,7 +114,10 @@ async function ensureRoom(bytes: number): Promise<void> {
 async function putPayload(meta: SnapshotMeta, blob: Blob): Promise<number> {
   try {
     return await putSnapshot(meta, blob);
-  } catch {
+  } catch (error) {
+    // 只有「这个实现不收 Blob」才值得重试；配额不足时整包读进内存只会更糟
+    const name = error instanceof DOMException ? error.name : '';
+    if (name !== 'DataCloneError' && !(error instanceof TypeError)) throw error;
     return await putSnapshot(meta, new Uint8Array(await blob.arrayBuffer()));
   }
 }
