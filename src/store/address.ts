@@ -12,6 +12,7 @@ import {
   ssAddr,
 } from '../core/address';
 import { textByteLength } from '../core/format';
+import { legacyHasSave } from '../core/legacy';
 import { clearDatabase, databases } from './idb';
 import { writeDatabase, type DbDump } from './idb/dump';
 import { readKey, readLocal, readSession, removeKeys, writeKey } from './local';
@@ -176,7 +177,8 @@ export async function listAddrs(): Promise<AddrInfo[]> {
     });
   }
   const legacy = readLegacy();
-  if (legacy.saves !== null || legacy.details !== null) {
+  // 与采集器同一条判据：只有列表元信息的空壳不算一份存档，别让兜底路径把它重新列出来
+  if (legacyHasSave(legacy.saves)) {
     out.push({
       addr: LEGACY_SAVE_ADDR,
       label: LEGACY_SAVE_ADDR,

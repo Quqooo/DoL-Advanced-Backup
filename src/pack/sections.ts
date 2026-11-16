@@ -12,6 +12,7 @@ import {
 import { textByteLength } from '../core/format';
 import { messageError } from '../core/error';
 import { createJsonWriter, type JsonSink } from '../core/jsonwrite';
+import { legacyHasSave } from '../core/legacy';
 import type { IndexDb, IndexKey, IndexSave, ManifestIndex } from '../core/manifest';
 import { dateOf, saveIdOf, saveNameOf } from '../core/savemeta';
 import { databases, type DbKey } from '../store/idb';
@@ -397,8 +398,10 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
     }
     const rows = encoded.filter(record => !dropped.has(record.slot));
     const legacy = wantLegacy ? readLegacy() : { saves: null, details: null };
-    if (wantLegacy && legacy.saves === null) throw messageError('packSelectionMissing', LEGACY_SAVE_ADDR);
-    const entries = rows.length + detailRows.length + (legacy.saves !== null ? 1 : 0);
+    // 空容器不进包：覆盖恢复会拿它把对面的旧式存档清空
+    const hasLegacy = legacyHasSave(legacy.saves);
+    if (wantLegacy && !hasLegacy) throw messageError('packSelectionMissing', LEGACY_SAVE_ADDR);
+    const entries = rows.length + detailRows.length + (hasLegacy ? 1 : 0);
     if (entries > 0) {
       announce('saves.json');
       const task = plainSection('saves.json', { engine: 'idb', saves: rows, details: detailRows, legacy }, entries, refs);
@@ -426,7 +429,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
         b: encodedBytes(rows[at].data, blobBytes) + (detail === undefined ? 0 : jsonSize(detail)),
       };
     });
-    index.legacy = legacy.saves !== null;
+    index.legacy = hasLegacy;
   }
   advance('saves');
 

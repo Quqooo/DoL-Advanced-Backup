@@ -3,6 +3,7 @@ import { LEGACY_DETAILS_KEY, LEGACY_SAVES_KEY } from '../core/constants';
 import { textByteLength } from '../core/format';
 import { groupOfKnown } from '../core/group';
 import type { Item } from '../core/item';
+import { legacyHasSave } from '../core/legacy';
 import { stringifyJson } from '../core/json';
 import { dateOf, saveIdOf, saveNameOf } from '../core/savemeta';
 import { encodingOf, readDetails, readLegacy, readSaves } from '../store/saves';
@@ -43,7 +44,8 @@ export const savesCollector: Collector = {
     });
 
     const legacy = readLegacy();
-    if (legacy.saves !== null || legacy.details !== null) {
+    // `dolSaveDetails` 每次打开存档菜单都会补一份，单独存在时没有任何可备份的存档
+    if (legacyHasSave(legacy.saves)) {
       items.push({
         addr: LEGACY_SAVE_ADDR,
         kind: 'save-legacy',
@@ -56,8 +58,9 @@ export const savesCollector: Collector = {
     return {
       collector: 'saves',
       items,
-      // 两键合成一条条目，键本身不再单独出现
-      claims: [lsAddr(LEGACY_SAVES_KEY), lsAddr(LEGACY_DETAILS_KEY)],
+      // 两键合成一条条目，键本身不再单独出现；`save:legacy` 有无也由本采集器决定，
+      // 兜底枚举不得再补一条
+      claims: [lsAddr(LEGACY_SAVES_KEY), lsAddr(LEGACY_DETAILS_KEY), LEGACY_SAVE_ADDR],
     };
   },
 };
