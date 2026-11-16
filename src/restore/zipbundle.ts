@@ -57,7 +57,12 @@ export async function bundleOfZip(zip: ZipLike): Promise<Bundle> {
   /** 已经验过的条目：同一个包在一轮恢复里会被读两遍（骨架 + 写入） */
   const verified = new Set<string>();
 
+  /** 与 `openBundle` 一样：`idb.json` 只解一次，三处读取共用同一份 */
+  const cached = new Map<string, Uint8Array>();
+
   const read = async (path: string): Promise<Uint8Array> => {
+    const hit = cached.get(path);
+    if (hit) return hit;
     const file = zip.files[path];
     if (!file) throw new BundleError('entry', 'bundleMissingEntry', path);
     let bytes: Uint8Array;
@@ -77,6 +82,7 @@ export async function bundleOfZip(zip: ZipLike): Promise<Bundle> {
       }
       verified.add(path);
     }
+    if (path === 'idb.json') cached.set(path, bytes);
     return bytes;
   };
 

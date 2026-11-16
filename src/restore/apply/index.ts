@@ -30,7 +30,7 @@ interface Step {
 }
 
 /** 写入前逐库预检；只累计选中载荷引用的块，不保留全分区对象图。 */
-async function validatePayloads(plan: RestorePlan, selected: ReadonlySet<string>): Promise<Map<string, Uint8Array>> {
+async function validatePayloads(plan: RestorePlan, selected: ReadonlySet<string>, signal?: AbortSignal): Promise<Map<string, Uint8Array>> {
   verifySectionIndex(plan.bundle, plan.sections);
   const blobs = new Map<string, Uint8Array>();
   const loadRefs = async (value: unknown): Promise<void> => {
@@ -49,6 +49,8 @@ async function validatePayloads(plan: RestorePlan, selected: ReadonlySet<string>
   let sectionOf: Awaited<ReturnType<typeof openDbSections>> | undefined;
   const byAddr = new Map(plan.items.map(item => [item.addr, item]));
   for (const addr of selected) {
+    // 整库预检是这条链上最长的一段，取消要能在这里生效
+    throwIfAborted(signal);
     const item = byAddr.get(addr);
     if (!item) throw messageError('bundleAddressMismatch');
     if (item.kind === 'save') {
@@ -115,7 +117,7 @@ export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
     input.onProgress?.({ ratio, ...(label ? { label } : {}) });
   };
   emit(0);
-  const blobs = await validatePayloads(input.plan, input.selected);
+  const blobs = await validatePayloads(input.plan, input.selected, input.signal);
   emit(LOAD_END);
 
   // 缺省豁免：与下面镜像用的是同一个值
@@ -169,51 +171,57 @@ export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
   const spanOf = (weight: number): number => (1 - LOAD_END) * (weight / totalWeight);
   let base = LOAD_END;
 
-  for (const [index, step] of steps.entries()) {
-    throwIfAborted(input.signal);
-    const span = spanOf(weights[index]);
-    state.tick = fraction => emit(base + span * Math.min(1, Math.max(0, fraction)), step.label);
-    emit(base, step.label);
-    try {
-      await step.run();
-    } catch (error) {
-      fail(report, step.category, step.label, error);
-      stepFailures.push(...categoriesOf(state, step.kinds));
+  try {
+    for (const [index, step] of steps.entries()) {
+      throwIfAborted(input.signal);
+      const span = spanOf(weights[index]);
+      state.tick = fraction => emit(base + span * Math.min(1, Math.max(0, fraction)), step.label);
+      emit(base, step.label);
+      try {
+        await step.run();
+      } catch (error) {
+        fail(report, step.category, step.label, error);
+        stepFailures.push(...categoriesOf(state, step.kinds));
+      }
+      base += span;
+      emit(base, step.label);
     }
-    base += span;
-    emit(base, step.label);
-  }
 
-  // 这次写回去的库要从待删标记里退掉：用户在重载前又恢复了一次，旧名字会让它下次启动被误删
-  if (state.writtenDbs.size > 0) removePendingDrop(state.writtenDbs);
+    // 这次写回去的库要从待删标记里退掉：用户在重载前又恢复了一次，旧名字会让它下次启动被误删
+    if (state.writtenDbs.size > 0) removePendingDrop(state.writtenDbs);
 
-  if (scope !== null) {
-    throwIfAborted(input.signal);
-    const span = spanOf(mirrorWeight);
-    state.tick = fraction => emit(base + span * Math.min(1, Math.max(0, fraction)), 'mirror');
-    emit(base, 'mirror');
-    // 逐条失败与整步失败都要算：前者记在条目的分类上，后者由步骤自己声明
-    const failed = new Set<Category>([...report.failures.map(item => item.category), ...stepFailures]);
-    const mirror = await mirrorPlan({
-      plan: input.plan,
-      selected: guarded,
-      keepSelf,
-      scope,
-      failed,
-      selfPack: state.selfPack,
-    });
-    Object.assign(report.deleted, mirror.deleted);
-    report.failures.push(...mirror.failures);
-    report.skippedMirror = mirror.skipped;
-    if (mirror.skipped.length > 0) {
-      warn(report, { code: 'mirror-skipped', detail: mirror.skipped.join(', ') });
+    if (scope !== null) {
+      throwIfAborted(input.signal);
+      const span = spanOf(mirrorWeight);
+      state.tick = fraction => emit(base + span * Math.min(1, Math.max(0, fraction)), 'mirror');
+      emit(base, 'mirror');
+      // 逐条失败与整步失败都要算：前者记在条目的分类上，后者由步骤自己声明
+      const failed = new Set<Category>([...report.failures.map(item => item.category), ...stepFailures]);
+      const mirror = await mirrorPlan({
+        plan: input.plan,
+        selected: guarded,
+        keepSelf,
+        scope,
+        failed,
+        selfPack: state.selfPack,
+      });
+      Object.assign(report.deleted, mirror.deleted);
+      report.failures.push(...mirror.failures);
+      report.skippedMirror = mirror.skipped;
+      if (mirror.skipped.length > 0) {
+        warn(report, { code: 'mirror-skipped', detail: mirror.skipped.join(', ') });
+      }
+      if (Object.values(mirror.deleted).some(value => (value ?? 0) > 0)) report.needsReload = true;
+      base += span;
     }
-    if (Object.values(mirror.deleted).some(value => (value ?? 0) > 0)) report.needsReload = true;
-    base += span;
-  }
 
-  // 对账始终执行，不分模式，也不依赖本次恢复的内容：两份列表必须正好等于已安装集合
-  await reconcileModOrder(state);
+  } finally {
+    /**
+     * 对账始终执行，取消也要跑：`applyLists` 已经按删除名单剪过启用列表，
+     * 而镜像可能因取消没执行——包还在，名字却没了。对账按存储里的实际内容补回来。
+     */
+    await reconcileModOrder(state).catch(error => fail(report, 'mods', 'mods', error));
+  }
 
   emit(1);
   return report;

@@ -98,6 +98,23 @@ interface IdbSource {
   ranges: JsonRange[];
 }
 
+/**
+ * 同一份计划只解压 `idb.json` 一次。
+ *
+ * 预检与写入都要按库切片；`Bundle.read` 没有缓存，不在这里留住就会把上百 MB 的分区
+ * 解两遍（再加上建骨架那次，共三次）。
+ */
+const idbSources = new WeakMap<RestorePlan, Promise<IdbSource | null>>();
+
+async function idbSourceOf(plan: RestorePlan): Promise<IdbSource | null> {
+  let cached = idbSources.get(plan);
+  if (!cached) {
+    cached = openIdbSource(plan.bundle);
+    idbSources.set(plan, cached);
+  }
+  return await cached;
+}
+
 async function openIdbSource(bundle: RestorePlan['bundle']): Promise<IdbSource | null> {
   if (!bundle.has('idb.json')) return null;
   const bytes = await bundle.read('idb.json');
@@ -111,7 +128,7 @@ async function openIdbSource(bundle: RestorePlan['bundle']): Promise<IdbSource |
 export async function openDbSections(plan: RestorePlan): Promise<(name: string) => DbSection> {
   const skeleton = plan.sections.idb?.dbs ?? [];
   const order = new Map(skeleton.map((db, index) => [db.name, index]));
-  const source = await openIdbSource(plan.bundle);
+  const source = await idbSourceOf(plan);
   if (!source || source.ranges.length !== skeleton.length) throw messageError('bundleAddressMismatch');
   return name => {
     const index = order.get(name);

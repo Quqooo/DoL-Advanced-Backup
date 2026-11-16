@@ -5,7 +5,7 @@ import { parseJson } from '../core/json';
 import { parseManifest, type Manifest, type ManifestSection } from '../core/manifest';
 import { hasModPackMagic, modPackEntryRange, readModPackLayoutFrom } from '../core/modpack';
 import { decodeEntry } from '../pack/codec';
-import { blobSource, bytesSource, openZip, sliceSource, ZipEntryCorrupt, type ZipSource } from '../core/zipread';
+import { blobSource, bytesSource, openZip, sliceSource, Zip64Unsupported, ZipEntryCorrupt, type ZipSource } from '../core/zipread';
 
 export type BundleErrorCode = 'zip' | 'manifest' | 'entry' | 'json' | 'verify';
 
@@ -147,7 +147,10 @@ export async function openBundle(source: Uint8Array | Blob): Promise<Bundle> {
     zipSource = sliceSource(zipSource, inner.start, inner.length);
   }
 
-  const zip = await openZip(zipSource);
+  const zip = await openZip(zipSource).catch(error => {
+    if (error instanceof Zip64Unsupported) fail('zip', 'bundleZip64');
+    throw error;
+  });
   if (zip.entries.length === 0) fail('zip', 'bundleNotZip');
   const names = new Set(zip.entries.map(entry => entry.name));
   if (!names.has('manifest.json')) fail('manifest', 'bundleNoManifest');
@@ -177,7 +180,14 @@ export async function openBundle(source: Uint8Array | Blob): Promise<Bundle> {
     return entry ? { size: entry.size, crc: entry.crc } : undefined;
   });
 
+  /**
+   * `idb.json` 一次恢复会被骨架、预检、写入三处读；它可能有上百 MB，
+   * 每处都解一遍既费时间又反复占内存。只缓存这一份，其余条目照旧按需读。
+   */
+  let idbBytes: Uint8Array | null = null;
+
   const read = async (path: string): Promise<Uint8Array> => {
+    if (path === 'idb.json' && idbBytes) return idbBytes;
     let data: Uint8Array | null;
     try {
       data = await zip.read(path, decodeEntry);
@@ -187,6 +197,7 @@ export async function openBundle(source: Uint8Array | Blob): Promise<Bundle> {
       throw error;
     }
     if (!data) fail('entry', 'bundleMissingEntry', path);
+    if (path === 'idb.json') idbBytes = data;
     return data;
   };
 
