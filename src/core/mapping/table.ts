@@ -199,4 +199,30 @@ export const MAPPING: readonly MappingEntry[] = [
     keys: [{ match: 'NPCModel_cfg_v2', badge: 'badgeSettings' }],
     dbs: [{ match: 'NPCModelDB', badge: 'badgeNpcModels' }],
   },
+  {
+    // 只有设置一个键，键名带结构版本号（`.v1`），按前缀列才不会在换版时失配
+    mod: 'MapleLantern',
+    label: 'mapMapleLantern',
+    keys: [{ match: prefix('MapleLantern.settings.'), badge: 'badgeSettings' }],
+  },
+  {
+    // 联机扩展：账号、世界存档与界面状态全在 localStorage，没有自建库。
+    // 它也会写游戏本体的 dolTheme / dolSfx，那两个由静态表认领，这里不列
+    mod: 'DoL 联机&地下城',
+    label: 'DoLOnline',
+    keys: [
+      { match: prefix('dolonline_'), badge: 'badgeAccount' },
+      { match: 'dolon_pass', badge: 'badgeAccount' },
+      { match: prefix('dolon_btn_'), badge: 'badgeUiState' },
+      { match: 'dolon_panel_pos', badge: 'badgeUiState' },
+      { match: 'dolon_ui_scale', badge: 'badgeUiState' },
+      { match: 'dolon_zoom_comp', badge: 'badgeUiState' },
+      { match: 'dolon_world', badge: 'badgeWorldSave' },
+      { match: 'dolon_mybackup', badge: 'badgeWorldSave' },
+      { match: 'dolon_tradeseq', badge: 'badgeTradeSeq' },
+      { match: 'dolon_onboarded', badge: 'badgeTutorial' },
+      // 其余 dolon_ 键是联机开关与凭据标记；放在最后，新键不会掉进「其他」
+      { match: prefix('dolon_'), badge: 'badgeOnlineState' },
+    ],
+  },
 ];

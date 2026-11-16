@@ -229,11 +229,16 @@ export interface Strings {
   badgeImageCache: string;
   badgeFurniture: string;
   badgeNpcModels: string;
+  badgeAccount: string;
+  badgeWorldSave: string;
+  badgeTradeSeq: string;
+  badgeOnlineState: string;
   /** 内置映射表的显示名：条目 `label` 写这些键，查不到就显示键本身 */
   mapAdvbk: string;
   mapHotkeys: string;
   mapMaplebirch: string;
   mapMaplebirchCe: string;
+  mapMapleLantern: string;
   mapCheatExtended: string;
   mapOptimization: string;
   mapBeautyFixer: string;
@@ -505,10 +510,15 @@ const ZH: Strings = {
   badgeImageCache: '插画缓存',
   badgeFurniture: '家具素材',
   badgeNpcModels: 'NPC 模型',
+  badgeAccount: '账号与服务器',
+  badgeWorldSave: '世界存档',
+  badgeTradeSeq: '交易序号',
+  badgeOnlineState: '联机状态',
   mapAdvbk: '高级备份',
   mapHotkeys: '通用快捷键',
   mapMaplebirch: '枫桦框架',
   mapMaplebirchCe: '枫桦CE',
+  mapMapleLantern: '灯台',
   mapCheatExtended: '作弊拓展',
   mapOptimization: '原版优化',
   mapBeautyFixer: '美化修正',
@@ -891,10 +901,15 @@ const EN: Strings = {
   badgeImageCache: 'Image cache',
   badgeFurniture: 'Furniture assets',
   badgeNpcModels: 'NPC models',
+  badgeAccount: 'Account & server',
+  badgeWorldSave: 'World save',
+  badgeTradeSeq: 'Trade sequence',
+  badgeOnlineState: 'Online state',
   mapAdvbk: 'Advanced Backup',
   mapHotkeys: 'DoL Hotkeys',
   mapMaplebirch: 'Maple Birch',
   mapMaplebirchCe: 'Maple Birch CE',
+  mapMapleLantern: 'Maple Lantern',
   mapCheatExtended: 'Cheat Extended',
   mapOptimization: 'Optimization',
   mapBeautyFixer: 'Beauty Fixer',
