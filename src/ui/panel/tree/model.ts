@@ -137,15 +137,16 @@ export interface SubPart {
 }
 
 /**
- * 第二行：存档给「时间 | ID」，模组给「已装 → 包内」的版本与昵称。
+ * 第二行：存档给「时间 | 名称」，模组给「已装 → 包内」的版本与昵称。
  *
  * 返回片段而不是整串：恢复页要按「包内更新 / 更旧」给版本上色，
  * 拼成字符串就没法只给后半截上色了。
  */
 export function subPartsOf(item: Item): SubPart[] {
-  // 存档：时间 | ID（游戏存档列表里「ID/名称」那一列的数）
+  // 存档：时间 | 名称（与游戏「ID/名称」列同源；没有名称时退回 ID，游戏也是这么显示的）
   if (item.kind === 'save') {
-    const text = [item.mtime ? formatStamp(item.mtime) : '', item.saveId === undefined ? '' : String(item.saveId)]
+    const name = item.saveName || (item.saveId === undefined ? '' : String(item.saveId));
+    const text = [item.mtime ? formatStamp(item.mtime) : '', name]
       .filter(Boolean)
       .join(' | ');
     return text ? [{ text }] : [];

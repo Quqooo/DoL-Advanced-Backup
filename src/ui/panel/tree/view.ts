@@ -26,6 +26,7 @@ export function sameRow(left: Item, right: Item): boolean {
     && left.sizeState === right.sizeState
     && left.mtime === right.mtime
     && left.saveId === right.saveId
+    && left.saveName === right.saveName
     && left.count === right.count
     && left.detail?.join('\n') === right.detail?.join('\n')
     && left.flags?.self === right.flags?.self

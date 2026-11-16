@@ -6,7 +6,7 @@ import type { ManifestIndex, ManifestModItem } from '../../core/manifest';
 import { matches, selfEntry } from '../../core/mapping';
 import { createDecoder } from '../../pack/decode';
 import { fieldOfEncoded, isEncodedArray } from '../../pack/graph';
-import { dateOf, saveIdOf } from '../../core/savemeta';
+import { dateOf, saveIdOf, saveNameOf } from '../../core/savemeta';
 import type { Bundle } from '../bundle';
 import type {
   IdbSection,
@@ -48,7 +48,7 @@ export function itemsOfKeys(section: KeysSection, ctx: GroupContext): Item[] {
 
 export function itemsOfSaves(section: SavesSection, ctx: GroupContext, format: 1 | 2 = 2): Item[] {
   const items: Item[] = [];
-  // 恢复页的行要与导出页长得一样：标题、时间、ID 都从包内 details 里取
+  // 恢复页的行要与导出页长得一样：标题、时间、名称、ID 都从包内 details 里取
   const detailBySlot = new Map(section.details.map(record => [record.slot, record]));
   const decodeDetail = (raw: unknown): Record<string, unknown> | null => {
     try {
@@ -67,6 +67,7 @@ export function itemsOfSaves(section: SavesSection, ctx: GroupContext, format: 1
     const title = detail?.title;
     const mtime = dateOf(detail?.date);
     const saveId = saveIdOf(detail);
+    const saveName = saveNameOf(detail);
     // 带 id 的数组会包成 `$ab:arr`，自带 `$ab:` 键的存档会包进 `$ab:obj`；
     // 共享成 `$ab:ref` 的数组在这里认不出来，恢复页以索引里的 `delta` 为准
     const delta = isEncodedArray(fieldOfEncoded(record.data, 'delta'));
@@ -77,6 +78,7 @@ export function itemsOfSaves(section: SavesSection, ctx: GroupContext, format: 1
       ...(typeof title === 'string' && title.length > 0 ? { label: title } : {}),
       ...(mtime === undefined ? {} : { mtime }),
       ...(saveId === undefined ? {} : { saveId }),
+      ...(saveName === undefined ? {} : { saveName }),
       order: record.slot,
       ...(delta ? { flags: { delta: true } } : {}),
     });
@@ -182,6 +184,8 @@ export function itemsOfIndex(index: ManifestIndex, ctx: GroupContext): Item[] {
       ...(save.title ? { label: save.title } : {}),
       ...(save.date === undefined ? {} : { mtime: save.date }),
       ...(save.id === undefined ? {} : { saveId: save.id }),
+      // 旧包没有名称，行上退回 ID；新包有名称时优先显示名称
+      ...(save.name ? { saveName: save.name } : {}),
       order: save.slot,
       bytes: save.b,
       ...(save.delta ? { flags: { delta: true } } : {}),

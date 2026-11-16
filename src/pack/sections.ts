@@ -13,7 +13,7 @@ import { textByteLength } from '../core/format';
 import { messageError } from '../core/error';
 import { createJsonWriter, type JsonSink } from '../core/jsonwrite';
 import type { IndexDb, IndexKey, IndexSave, ManifestIndex } from '../core/manifest';
-import { dateOf, saveIdOf } from '../core/savemeta';
+import { dateOf, saveIdOf, saveNameOf } from '../core/savemeta';
 import { databases, type DbKey } from '../store/idb';
 import { openDbReader, type DbReader } from '../store/idb/dump';
 import { readLocal, readSession } from '../store/local';
@@ -407,19 +407,21 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
       await onSection(task);
     }
 
-    // 索引与分区同源：标题、时间、ID 都取自同一份 details，恢复页不必再解压 saves.json
+    // 索引与分区同源：标题、时间、名称、ID 都取自同一份 details，恢复页不必再解压 saves.json
     const blobBytes = new Map(blobs.list().map(item => [item.blob.file, item.blob.bytes]));
     index.saves = rows.map<IndexSave>((record, at) => {
       const detail = detailBySlot.get(record.slot);
       const meta = detail && typeof detail === 'object' ? (detail as Record<string, unknown>) : null;
       const title = meta?.title;
       const saveId = saveIdOf(meta);
+      const saveName = saveNameOf(meta);
       const mtime = dateOf(meta?.date);
       return {
         slot: record.slot,
         ...(typeof title === 'string' && title.length > 0 ? { title } : {}),
         ...(mtime === undefined ? {} : { date: mtime }),
         ...(saveId === undefined ? {} : { id: saveId }),
+        ...(saveName === undefined ? {} : { name: saveName }),
         ...(record.delta ? { delta: true } : {}),
         b: encodedBytes(rows[at].data, blobBytes) + (detail === undefined ? 0 : jsonSize(detail)),
       };

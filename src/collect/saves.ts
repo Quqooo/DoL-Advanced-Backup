@@ -4,7 +4,7 @@ import { textByteLength } from '../core/format';
 import { groupOfKnown } from '../core/group';
 import type { Item } from '../core/item';
 import { stringifyJson } from '../core/json';
-import { dateOf, saveIdOf } from '../core/savemeta';
+import { dateOf, saveIdOf, saveNameOf } from '../core/savemeta';
 import { encodingOf, readDetails, readLegacy, readSaves } from '../store/saves';
 import type { CollectContext, Collector, CollectResult } from './index';
 
@@ -27,6 +27,7 @@ export const savesCollector: Collector = {
       const addr = saveAddr(record.slot);
       const mtime = dateOf(detail?.data?.date);
       const saveId = saveIdOf(detail?.data);
+      const saveName = saveNameOf(detail?.data);
       return {
         addr,
         kind: 'save',
@@ -35,6 +36,7 @@ export const savesCollector: Collector = {
         bytes: jsonBytes(record),
         ...(mtime === undefined ? {} : { mtime }),
         ...(saveId === undefined ? {} : { saveId }),
+        ...(saveName === undefined ? {} : { saveName }),
         order: record.slot,
         ...(encodingOf(record) === 'delta' ? { flags: { delta: true } } : {}),
       };

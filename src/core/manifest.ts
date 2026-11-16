@@ -90,6 +90,13 @@ export interface IndexSave {
   /** details.date 解析出的毫秒时间戳，树行第二行要显示 */
   date?: number;
   id?: number;
+  /**
+   * details.metadata.saveName；只在有名字时写。
+   *
+   * 这是后加的可选字段：旧版本读到它不认识，按原有字段照样建树与恢复，
+   * 所以包格式号不变（升号会让旧版本直接拒收）。
+   */
+  name?: string;
   /** 该存档带 delta 段 */
   delta?: boolean;
   b: number;
@@ -154,6 +161,7 @@ function parseIndex(raw: unknown): ManifestIndex | null {
     if (save.title !== undefined && typeof save.title !== 'string') return null;
     if (save.date !== undefined && !isCount(save.date)) return null;
     if (save.id !== undefined && !isCount(save.id)) return null;
+    if (save.name !== undefined && typeof save.name !== 'string') return null;
     if (save.delta !== undefined && typeof save.delta !== 'boolean') return null;
   }
   for (const db of dbs) {

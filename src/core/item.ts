@@ -73,8 +73,10 @@ export interface Item {
   mtime?: number;
   /** 整库的记录数、模组列表的项数这类附加计数 */
   count?: number;
-  /** 存档的 `metadata.saveId`：游戏存档列表里「ID/名称」那一列的数 */
+  /** 存档的 `metadata.saveId`：游戏存档列表里「ID/名称」那一列的数；没有名称时行上显示它 */
   saveId?: number;
+  /** 存档的 `metadata.saveName`：有名称时行上显示它，优先于 `saveId` */
+  saveName?: string;
   /** 组内排序键（槽号、加载顺序）；缺省按名称排 */
   order?: number;
   flags?: ItemFlags;
