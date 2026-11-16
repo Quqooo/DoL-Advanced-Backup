@@ -310,9 +310,10 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
   const needsLists = selected.has(MOD_ORDER_ADDR) || selected.has(MOD_HIDDEN_ADDR);
   const lists = needsLists
     ? await readIdbModLists()
-    : { enabled: [] as string[], hidden: [] as string[], orderPresent: false, hiddenPresent: false };
-  const wantOrder = selected.has(MOD_ORDER_ADDR) && lists.orderPresent;
-  const wantHidden = selected.has(MOD_HIDDEN_ADDR) && lists.hiddenPresent;
+    : { enabled: [] as string[], hidden: [] as string[], orderPresent: false, hiddenPresent: false, orderValid: false, hiddenValid: false };
+  // 键在但读不出来时不写这一份：把损坏的列表写成空数组，恢复会把顺序清掉
+  const wantOrder = selected.has(MOD_ORDER_ADDR) && lists.orderPresent && lists.orderValid;
+  const wantHidden = selected.has(MOD_HIDDEN_ADDR) && lists.hiddenPresent && lists.hiddenValid;
   if (selected.has(MOD_ORDER_ADDR) && !wantOrder) throw messageError('packSelectionMissing', MOD_ORDER_ADDR);
   if (selected.has(MOD_HIDDEN_ADDR) && !wantHidden) throw messageError('packSelectionMissing', MOD_HIDDEN_ADDR);
 

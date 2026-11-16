@@ -68,13 +68,22 @@ export async function applyLegacy(state: ApplyState): Promise<void> {
     for (const item of items) bump(state.report, item, 'skipped');
     return;
   }
-  // 补缺：本机已有旧式存档就不动它
+  // 补缺：只补本机缺的那一边。存档在而 details 缺时也要补，否则标题与索引对不上
   if (state.plan.mode === 'missing') {
     const current = readLegacy();
-    if (current.saves !== null || current.details !== null) {
+    const needSaves = legacy.saves !== null && current.saves === null;
+    const needDetails = legacy.details !== null && current.details === null;
+    if (!needSaves && !needDetails) {
       for (const item of items) bump(state.report, item, 'skipped');
       return;
     }
+    try {
+      writeLegacy({ saves: needSaves ? legacy.saves : null, details: needDetails ? legacy.details : null });
+      for (const item of items) bump(state.report, item, 'applied');
+    } catch (error) {
+      fail(state.report, 'saves', items[0].addr, error);
+    }
+    return;
   }
   // 两个键一次写完：`writeLegacy` 内部按需写两个键，在循环里重复调用没有效果
   try {

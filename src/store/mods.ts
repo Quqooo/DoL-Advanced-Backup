@@ -22,13 +22,18 @@ export interface LocalMods {
   values: Map<string, string>;
 }
 
-function parseList(raw: unknown): string[] {
-  if (typeof raw !== 'string') return [];
+/**
+ * 解析列表键。`valid` 区分「空列表」与「读不出来」：
+ * 损坏时若当成空列表写进包，恢复会把启用列表换成空的（顺序丢失，取消时更糟）。
+ */
+function parseList(raw: unknown): { values: string[]; valid: boolean } {
+  if (typeof raw !== 'string') return { values: [], valid: false };
   try {
     const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+    if (!Array.isArray(parsed)) return { values: [], valid: false };
+    return { values: parsed.filter((item): item is string => typeof item === 'string'), valid: true };
   } catch {
-    return [];
+    return { values: [], valid: false };
   }
 }
 
@@ -59,11 +64,11 @@ export async function readIdbMods(): Promise<IdbMods> {
       const key = String(all.keys[index]);
       const value = all.values[index];
       if (key === keys.list) {
-        enabled = parseList(value);
+        enabled = parseList(value).values;
         continue;
       }
       if (key === keys.hidden) {
-        hidden = parseList(value);
+        hidden = parseList(value).values;
         continue;
       }
       if (!key.startsWith(keys.prefix)) continue;
@@ -84,10 +89,13 @@ export async function readIdbModLists(): Promise<{
   /** 列表键本身在不在：缺了表示从没启用/禁用过，镜像时不该造出一个空列表 */
   orderPresent: boolean;
   hiddenPresent: boolean;
+  /** 键在但读不出来（坏 JSON / 不是数组）：这种值不能当成空列表写进包 */
+  orderValid: boolean;
+  hiddenValid: boolean;
 }> {
   const keys = modKeys();
   const db = await openDb(keys.db);
-  if (!db) return { enabled: [], hidden: [], orderPresent: false, hiddenPresent: false };
+  if (!db) return { enabled: [], hidden: [], orderPresent: false, hiddenPresent: false, orderValid: false, hiddenValid: false };
   try {
     const tx = db.transaction(keys.store, 'readonly');
     const store = tx.objectStore(keys.store);
@@ -95,11 +103,15 @@ export async function readIdbModLists(): Promise<{
       request(store.get(keys.list)),
       request(store.get(keys.hidden)),
     ]);
+    const order = parseList(list);
+    const hiddenList = parseList(hidden);
     return {
-      enabled: parseList(list),
-      hidden: parseList(hidden),
+      enabled: order.values,
+      hidden: hiddenList.values,
       orderPresent: list !== undefined,
       hiddenPresent: hidden !== undefined,
+      orderValid: order.valid,
+      hiddenValid: hiddenList.valid,
     };
   } finally {
     close(db);
@@ -268,7 +280,7 @@ export function readLocalMods(): LocalMods {
   let list: string[] = [];
   for (const entry of readLocal()) {
     if (entry.key === keys.list) {
-      list = parseList(entry.value);
+      list = parseList(entry.value).values;
       continue;
     }
     if (entry.key.startsWith(keys.prefix)) {
@@ -332,8 +344,9 @@ export async function deleteModValue(name: string): Promise<boolean> {
       close(db);
     }
   }
-  removeKeys([`${keys.localPrefix}${name}`]);
-  return existed;
+  // 按删除后的实际状态计数：`removeKeys` 可能删不掉，别把失败报成已删除
+  const failed = removeKeys([`${keys.localPrefix}${name}`]);
+  return existed && failed.length === 0 && readKey(`${keys.localPrefix}${name}`) === null;
 }
 
 /** 列表键原样写入；值为 null 表示删掉这个键 */

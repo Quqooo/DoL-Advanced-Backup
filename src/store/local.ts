@@ -52,14 +52,23 @@ export function writeKey(key: string, value: string, kind: Kind = 'local'): bool
   }
 }
 
-export function removeKeys(keys: readonly string[], kind: Kind = 'local'): void {
+/**
+ * 删除若干键；返回删不掉的那些。
+ *
+ * 调用方要按实际结果计数：`removeItem` 在存储被禁用或配额异常时会抛，
+ * 吞掉异常再报「已删除」会让用户以为本机已经干净。
+ */
+export function removeKeys(keys: readonly string[], kind: Kind = 'local'): string[] {
   const area = storage(kind);
-  if (!area) return;
+  if (!area) return [...keys];
+  const failed: string[] = [];
   for (const key of keys) {
     try {
       area.removeItem(key);
     } catch (error) {
+      failed.push(key);
       console.warn(`[AdvancedBackup] 删除 ${key} 失败`, error);
     }
   }
+  return failed;
 }

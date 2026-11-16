@@ -23,7 +23,7 @@ import {
   writeModList,
   writeModValue,
 } from './mods';
-import { deleteSaves, detailTime, gameDbName, readDetails, readLegacy, readSaves, writeLegacy, writeSaves } from './saves';
+import { deleteSaveSlot, detailTime, gameDbName, readDetails, readLegacy, readSaves, writeLegacy, writeSaves } from './saves';
 
 /**
  * 地址 → 存储写入与删除。地址是唯一身份（`core/address.ts`），这一层只管「把它写回去 / 删掉 / 列出来」，
@@ -129,8 +129,7 @@ export async function removeAddr(addr: string): Promise<boolean> {
     case 'ss': {
       const kind = parsed.scheme === 'ss' ? 'session' : 'local';
       if (readKey(parsed.name, kind) === null) return false;
-      removeKeys([parsed.name], kind);
-      return true;
+      return removeKeys([parsed.name], kind).length === 0;
     }
     case 'ck':
       // 旧包里的 Cookie 条目不恢复，也不从本机删除
@@ -142,13 +141,10 @@ export async function removeAddr(addr: string): Promise<boolean> {
       if (parsed.engine === 'legacy') {
         const legacy = readLegacy();
         if (legacy.saves === null && legacy.details === null) return false;
-        removeKeys([LEGACY_SAVES_KEY, LEGACY_DETAILS_KEY]);
-        return true;
+        return removeKeys([LEGACY_SAVES_KEY, LEGACY_DETAILS_KEY]).length === 0;
       }
-      const present = (await readSaves()).some(record => record.slot === parsed.slot);
-      if (!present) return false;
-      await deleteSaves([parsed.slot]);
-      return true;
+      // 读与删同一个事务：两步之间写进来的存档不会被误判
+      return await deleteSaveSlot(parsed.slot);
     }
     case 'mod':
       return deleteModValue(parsed.name);
@@ -215,10 +211,10 @@ export async function listAddrs(): Promise<AddrInfo[]> {
 
   await attempt(async () => {
     const lists = await readIdbModLists();
-    if (lists.orderPresent) {
+    if (lists.orderPresent && lists.orderValid) {
       out.push({ addr: MOD_ORDER_ADDR, label: MOD_ORDER_ADDR, count: lists.enabled.length });
     }
-    if (lists.hiddenPresent) {
+    if (lists.hiddenPresent && lists.hiddenValid) {
       out.push({ addr: MOD_HIDDEN_ADDR, label: MOD_HIDDEN_ADDR, count: lists.hidden.length });
     }
   });

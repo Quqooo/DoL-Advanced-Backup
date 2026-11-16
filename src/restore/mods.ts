@@ -58,7 +58,8 @@ export async function uninstallMod(addr: string): Promise<boolean> {
   if (hasApi('removeModIndexDB')) {
     await removeMod(stored);
     await removeModLocal(stored);
-    return existed;
+    // 控制器的返回值只说明「调用没抛错」；是否真删掉要看存储
+    return existed && !(await hasModValue(stored));
   }
   return deleteModValue(stored);
 }

@@ -15,7 +15,7 @@ export const modStateCollector: Collector = {
     const keys = modKeys();
     const items: Item[] = [];
 
-    if (lists.orderPresent) {
+    if (lists.orderPresent && lists.orderValid) {
       items.push({
         addr: MOD_ORDER_ADDR,
         kind: 'mod-list',
@@ -26,7 +26,7 @@ export const modStateCollector: Collector = {
         detail: [`${keys.db}/${keys.list}`],
       });
     }
-    if (lists.hiddenPresent) {
+    if (lists.hiddenPresent && lists.hiddenValid) {
       items.push({
         addr: MOD_HIDDEN_ADDR,
         kind: 'mod-list',

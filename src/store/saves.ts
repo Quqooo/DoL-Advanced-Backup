@@ -142,6 +142,8 @@ export function writeLegacy(legacy: { saves: string | null; details: string | nu
   try {
     if (legacy.saves !== null) area.setItem(LEGACY_SAVES_KEY, legacy.saves);
     if (legacy.details !== null) area.setItem(LEGACY_DETAILS_KEY, legacy.details);
+    // 换了存档却没带 details：旧标题/时间对不上新存档，留着比删掉更容易误导
+    else if (legacy.saves !== null) area.removeItem(LEGACY_DETAILS_KEY);
   } catch {
     let restored = true;
     [LEGACY_SAVES_KEY, LEGACY_DETAILS_KEY].forEach((key, index) => {
@@ -167,6 +169,32 @@ export async function deleteSaves(slots: readonly number[]): Promise<void> {
         details.delete(slot);
       }
     });
+  } finally {
+    close(db);
+  }
+}
+
+/**
+ * 删一个槽并返回它是否存在。
+ *
+ * 读与删放在同一个事务里：先 `readSaves` 再 `deleteSaves` 会让两步之间新写进来的
+ * 存档被当成「本来就有」或「本来就没有」。调用方按返回值报告删除数。
+ */
+export async function deleteSaveSlot(slot: number): Promise<boolean> {
+  const db = await openDb(gameDb);
+  if (!db) return false;
+  try {
+    let existed = false;
+    await saveTransaction(db, (saves, details, _tx, reject) => {
+      const probe = saves.get(slot);
+      probe.onerror = () => reject(probe.error);
+      probe.onsuccess = () => {
+        existed = probe.result !== undefined;
+        saves.delete(slot);
+        details.delete(slot);
+      };
+    });
+    return existed;
   } finally {
     close(db);
   }
