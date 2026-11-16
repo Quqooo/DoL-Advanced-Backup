@@ -30,3 +30,20 @@ export const SAFE_MODE_KEYS = [
   'ModLoadSwitch_safeModeForceOn',
   'ModLoadSwitch_safeModeAutoOn',
 ] as const;
+
+/**
+ * ModLoader Neo 的界面数据。
+ *
+ * 前三个在 localStorage：界面偏好、上次停留的分页、言灵控制台历史（最多 30 条 `{code, time}`）。
+ * `HOT_RELOAD` 在 sessionStorage：`{save, passage, time}`，`save` 是完整存档字符串，生存期 10 分钟。
+ */
+export const NEO_UI_SETTINGS = 'modloader-neo-ui-settings';
+export const NEO_UI_TAB = 'modloader-neo-ui-tab';
+export const NEO_UI_SPELL_HISTORY = 'modloader-neo-ui-spell-history';
+export const NEO_UI_HOT_RELOAD = 'modloader-neo-ui-hot-reload';
+
+export const NEO_UI_KEYS: readonly string[] = [
+  NEO_UI_SETTINGS,
+  NEO_UI_TAB,
+  NEO_UI_SPELL_HISTORY,
+];

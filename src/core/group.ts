@@ -3,12 +3,17 @@ import {
   IMAGE_FILELIST_DB,
   IMAGE_ORDER_DB,
   IMAGE_STORE_DB,
+  NEO_CACHE_DB,
   SESSION_DEBUG_KEY,
   SESSION_NOIDB_KEY,
   SESSION_STATE_KEY,
   SESSION_WARN_KEY,
 } from './constants';
 import {
+  NEO_UI_HOT_RELOAD,
+  NEO_UI_SETTINGS,
+  NEO_UI_SPELL_HISTORY,
+  NEO_UI_TAB,
   PROGRESS_FEATS,
   PROGRESS_STORY,
   PROGRESS_WORLD,
@@ -50,6 +55,18 @@ export const SAFE_MODE_GROUP = 'mods/state/safe';
 /** 加密内容模组的解密口令：属于加载器而不是某个模组，换机器时要跟着走 */
 export const DECRYPT_GROUP = 'mods/decrypt';
 
+/**
+ * ModLoader Neo：界面偏好、上次分页、言灵历史、解析缓存与热重载标记。
+ *
+ * 五条都是 Neo 自己的数据，与具体模组无关，因此与「安全模式状态」「解密口令」同放加载器一层。
+ */
+export const NEO_GROUP = 'mods/neo';
+export const NEO_SETTINGS_GROUP = 'mods/neo/settings';
+export const NEO_TAB_GROUP = 'mods/neo/tab';
+export const NEO_HISTORY_GROUP = 'mods/neo/history';
+export const NEO_CACHE_GROUP = 'mods/neo/cache';
+export const NEO_HOT_RELOAD_GROUP = 'mods/neo/hot-reload';
+
 const STATIC_KEY_GROUPS: readonly { keys: readonly string[]; group: string }[] = [
   { keys: [PROGRESS_FEATS], group: 'progress/feats' },
   { keys: PROGRESS_STORY, group: 'progress/story' },
@@ -60,6 +77,9 @@ const STATIC_KEY_GROUPS: readonly { keys: readonly string[]; group: string }[] =
   { keys: [SETTINGS_AGE], group: 'settings/age' },
   { keys: [SETTINGS_IDB], group: 'settings/idb' },
   { keys: SAFE_MODE_KEYS, group: SAFE_MODE_GROUP },
+  { keys: [NEO_UI_SETTINGS], group: NEO_SETTINGS_GROUP },
+  { keys: [NEO_UI_TAB], group: NEO_TAB_GROUP },
+  { keys: [NEO_UI_SPELL_HISTORY], group: NEO_HISTORY_GROUP },
 ];
 
 /**
@@ -80,6 +100,7 @@ const STATIC_KEY_PATTERNS: readonly { test: RegExp; group: string }[] = [
 const STATIC_DB_GROUPS: readonly { keys: readonly string[]; group: string }[] = [
   { keys: [IMAGE_ORDER_DB], group: 'mods/image-order' },
   { keys: [IMAGE_FILELIST_DB, IMAGE_STORE_DB], group: 'mods/image-cache' },
+  { keys: [NEO_CACHE_DB], group: NEO_CACHE_GROUP },
 ];
 
 /** 图像包缓存库：能重建，标准档与模组档都不勾 */
@@ -89,12 +110,13 @@ export const IMAGE_CACHE_GROUP = 'mods/image-cache';
 /** 会话快照：真实游戏里刷新能回到原处，标准档勾它 */
 export const SESSION_SNAPSHOT_GROUP = 'session/state';
 
-/** sessionStorage 的四个键各成一组，键名就是分组名 */
+/** sessionStorage 的五个键各成一组，键名就是分组名 */
 const STATIC_SESSION_GROUPS: readonly { keys: readonly string[]; group: string }[] = [
   { keys: [SESSION_NOIDB_KEY], group: 'session/noidb' },
   { keys: [SESSION_DEBUG_KEY], group: 'session/debugState' },
   { keys: [SESSION_STATE_KEY], group: SESSION_SNAPSHOT_GROUP },
   { keys: [SESSION_WARN_KEY], group: 'session/rcWarn' },
+  { keys: [NEO_UI_HOT_RELOAD], group: NEO_HOT_RELOAD_GROUP },
 ];
 
 function staticGroupOf(value: string, rules: readonly { keys: readonly string[]; group: string }[]): string | null {

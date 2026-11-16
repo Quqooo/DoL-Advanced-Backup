@@ -26,6 +26,15 @@ export const IMAGE_ORDER_KEY = 'BeautySelectorAddon_OrderSaveKey';
 export const IMAGE_FILELIST_DB = 'BeautySelectorAddon_dbNameCacheFileList';
 export const IMAGE_STORE_DB = 'BeautySelectorAddon_dbNameImageStore';
 
+/**
+ * ModLoader Neo 的解析缓存库。
+ *
+ * 库与仓由 Neo 自己建（`idb-keyval` 风格，无 keyPath，键是 `v1|<版本串>|<zip hash>`），
+ * 内容能从模组包重建，不进任何预设。
+ */
+export const NEO_CACHE_DB = 'ModLoaderNeoCache';
+export const NEO_CACHE_STORE = 'parsedModInfo';
+
 /** 自动快照保留与显示的默认槽位数 */
 export const AUTO_KEEP = 3;
 

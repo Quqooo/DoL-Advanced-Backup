@@ -6,6 +6,7 @@ import { progressCollector, sessionCollector, settingsCollector } from './keys';
 import { modDataCollector } from './moddata';
 import { modStateCollector } from './modstate';
 import { modsCollector } from './mods';
+import { neoCollector } from './neo';
 import { otherCollector } from './other';
 import { savesCollector } from './saves';
 
@@ -37,6 +38,7 @@ const ORDER: readonly Collector[] = [
   modsCollector,
   modStateCollector,
   imagePackCollector,
+  neoCollector,
   modDataCollector,
 ];
 
@@ -54,7 +56,7 @@ export function contextOf(claimed: ReadonlySet<string>, group: GroupContext): Co
  * 条目按采集器落标记，重试单组时才能准确换掉旧条目。
  *
  * 去重走 Set：一条 `claims` 数组动辄上百个地址，逐个 `includes` 是 O(n²)，
- * 而整轮扫描要跑八次。
+ * 而整轮扫描要按采集器逐个跑。
  */
 export function absorb(result: CollectResult, into: { items: Item[]; claims: Record<string, string[]> }): void {
   const claims = into.claims[result.collector] ?? [];
