@@ -222,6 +222,34 @@ export function useSparseForm(length: number, present: number): boolean {
 }
 
 /**
+ * 编码结果的对象节点数预算。
+ *
+ * `countRefs` 只数不同对象，而恢复侧的 `validate` / `decode` 数的是编码后的 JSON 节点：
+ * 一个 `NaN`、`undefined`、`-0` 都会变成标记对象。两边口径不同时会出现「导出成功、
+ * 恢复在写入前中止」。这里按编码结果数一遍，把失败挪到导出阶段。
+ *
+ * 比 `validate` 略宽（不理解类型标记，见对象就数），只会更早拒绝，不会放过。
+ */
+export function assertEncodedBudget(value: unknown, basePath = ''): void {
+  let nodes = 0;
+  const walk = (node: unknown, path: string, depth: number): void => {
+    if (node === null || typeof node !== 'object') return;
+    if (++nodes > MAX_NODES) throw messageError('valueNodeLimit', path);
+    if (depth > MAX_DEPTH) throw messageError('valueDepthExceeded', path);
+    if (Array.isArray(node)) {
+      for (let index = 0; index < node.length; index++) {
+        if (index in node) walk(node[index], childPath(path, index), depth + 1);
+      }
+      return;
+    }
+    for (const key of Object.keys(node as Record<string, unknown>)) {
+      walk((node as Record<string, unknown>)[key], childPath(path, key), depth + 1);
+    }
+  };
+  walk(value, basePath, 0);
+}
+
+/**
  * 第一遍扫描：统计每个对象被引用的次数，并在这里发现不支持的类型。
  *
  * 根算一次入边。只有计数大于 1 的节点需要 id；因此常见数据不会因为格式升级多出标记。

@@ -3,6 +3,7 @@ import { messageError } from '../core/error';
 import { BlobTable } from './blob';
 import {
   ARR,
+  assertEncodedBudget,
   BIGINT,
   BLOB,
   BOXED,
@@ -198,7 +199,16 @@ function withId(out: Record<string, unknown>, id: number | undefined): Record<st
 export function encodeValue(value: unknown, blobs: BlobTable, source: string): Encoded {
   const counts = countRefs(value, source);
   const ctx: Context = { counts, ids: new WeakMap(), nextId: 0 };
-  return encodeNode(value, blobs, ctx, source, 0);
+  const encoded = encodeNode(value, blobs, ctx, source, 0);
+  // 编码结果的对象数要与恢复侧同口径：不一致时会出现「导出成功、恢复在写入前中止」
+  if (isThenable(encoded)) {
+    return encoded.then(result => {
+      assertEncodedBudget(result, source);
+      return result;
+    });
+  }
+  assertEncodedBudget(encoded, source);
+  return encoded;
 }
 
 /** 首次遇到需要 id 的对象时分配；再次遇到同一个对象说明它在图里被共享或成环 */
