@@ -49,13 +49,42 @@ function viewOf(bytes: Uint8Array): DataView {
 /**
  * 中央目录结束记录在文件尾部，注释最多 65535 字节，所以只需回溯这么多。
  * 不无界回溯：几百 MB 的包会退化成逐字节扫描。
+ *
+ * 只匹配签名不够：注释里出现同样四个字节时，最后一次匹配会落在注释中间。
+ * 用注释长度字段与文件尾对齐来排除这种假阳性。
  */
 function findEocd(view: DataView): number {
   const floor = Math.max(0, view.byteLength - TAIL);
   for (let offset = view.byteLength - EOCD_SIZE; offset >= floor; offset--) {
-    if (view.getUint32(offset, true) === EOCD) return offset;
+    if (view.getUint32(offset, true) !== EOCD) continue;
+    if (offset + EOCD_SIZE + view.getUint16(offset + 20, true) !== view.byteLength) continue;
+    return offset;
   }
   return -1;
+}
+
+/** 中央目录或条目数超出 uint32/uint16 时，普通 EOCD 会写满字段，真实值在 zip64 记录里 */
+function isZip64(view: DataView, eocd: number): boolean {
+  // zip64 定位器紧挨在经典 EOCD 之前
+  return eocd >= 20 && view.getUint32(eocd - 20, true) === 0x07064b50;
+}
+
+/** 读到 zip64 归档时抛这个：本模组不实现 zip64，要给出明确原因而不是空包 */
+export class Zip64Unsupported extends Error {
+  constructor() {
+    super('zip64 is not supported');
+    this.name = 'Zip64Unsupported';
+  }
+}
+
+/** CP437 的高半区（0x80–0xFF）：没有 UTF-8 标志的条目名按它解码 */
+const CP437_HIGH = 'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■\u00a0';
+
+function decodeName(bytes: Uint8Array, utf8: boolean): string {
+  if (utf8) return textDecoder.decode(bytes);
+  let out = '';
+  for (const byte of bytes) out += byte < 0x80 ? String.fromCharCode(byte) : CP437_HIGH[byte - 0x80] ?? '';
+  return out;
 }
 
 /** 从 `bytes[from]` 开始读 `count` 条中央目录记录 */
@@ -68,8 +97,10 @@ function parseCentral(bytes: Uint8Array, from: number, count: number): CentralEn
     const nameLength = view.getUint16(offset + 28, true);
     const extraLength = view.getUint16(offset + 30, true);
     const commentLength = view.getUint16(offset + 32, true);
+    // 第 11 位是「名字按 UTF-8 编码」；没设时按 ZIP 规范的 CP437 解，而不是硬当 UTF-8
+    const utf8 = (view.getUint16(offset + 8, true) & 0x0800) !== 0;
     out.push({
-      name: textDecoder.decode(bytes.subarray(offset + CENTRAL_SIZE, offset + CENTRAL_SIZE + nameLength)),
+      name: decodeName(bytes.subarray(offset + CENTRAL_SIZE, offset + CENTRAL_SIZE + nameLength), utf8),
       method: view.getUint16(offset + 10, true) as ZipMethod,
       comp: view.getUint32(offset + 20, true),
       size: view.getUint32(offset + 24, true),
@@ -254,6 +285,8 @@ export async function openZip(source: ZipSource): Promise<ZipIndex> {
   const tailView = viewOf(tail);
   const rel = findEocd(tailView);
   if (rel < 0) return empty;
+  // zip64 把真实条目数与偏移放在另一条记录里；本模组不实现，明确报错而不是返回空包
+  if (isZip64(tailView, rel)) throw new Zip64Unsupported();
 
   const eocdAbs = tailStart + rel;
   const count = tailView.getUint16(rel + 10, true);

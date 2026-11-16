@@ -1,5 +1,5 @@
 import { validateEntry, type MappingEntry } from './index';
-import type { Pattern, Rule } from './pattern';
+import { patternIssue, type Pattern, type Rule } from './pattern';
 
 /**
  * 包内映射表：只带恢复页认分组所需的部分。
@@ -50,6 +50,8 @@ function decodePattern(value: unknown): Pattern | null {
   if (typeof value !== 'object' || value === null) return null;
   const raw = value as Record<string, unknown>;
   if (typeof raw.re !== 'string' || typeof raw.flags !== 'string') return null;
+  // 先查长度与嵌套量词，再编译：外部输入不该有机会构造出会卡死的匹配
+  if (patternIssue(raw.re) !== null) return null;
   try {
     return new RegExp(raw.re, raw.flags);
   } catch {

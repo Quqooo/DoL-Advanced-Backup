@@ -164,7 +164,12 @@ function readBsonDocument(bytes: Uint8Array, view: DataView, start: number, limi
     // 必须前进：`next <= at` 时父循环会原地打转（子文档长度可以指回前面）
     if (item.next <= at) throw new Error('BSON 元素未前进');
     if (item.next > stop) throw new Error('BSON 元素越过文档结尾');
-    out[key.value] = item.value;
+    // `__proto__` 直接赋值会改原型：容器元数据来自外部文件，必须写成自有数据属性
+    if (key.value === '__proto__') {
+      Object.defineProperty(out, key.value, { value: item.value, enumerable: true, writable: true, configurable: true });
+    } else {
+      out[key.value] = item.value;
+    }
     at = item.next;
   }
   return { value: out, next: end };

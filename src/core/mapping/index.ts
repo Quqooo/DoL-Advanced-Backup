@@ -1,10 +1,10 @@
 import { SELF_NAME } from '../constants';
 import { modMatches } from '../bootmeta';
 import { MAPPING } from './table';
-import { badgeOfRule, isRule, matchesRule, patternOf, type Rule } from './pattern';
+import { badgeOfRule, isRule, matchesRule, patternIssue, patternOf, type Rule } from './pattern';
 
 export type { BadgedPattern, Pattern, Rule } from './pattern';
-export { badgeOfRule, isRule, matches, matchesRule, MAX_BADGE, prefix } from './pattern';
+export { badgeOfRule, isRule, matches, matchesRule, MAX_BADGE, patternIssue, prefix } from './pattern';
 
 /**
  * 显示文案。
@@ -77,6 +77,11 @@ function checkRules(value: unknown): boolean {
   if (value === undefined) return true;
   if (!Array.isArray(value) || value.length === 0) return false;
   if (!value.every(isRule)) return false;
+  // 正则本身也要过长度与嵌套量词的检查：第三方注册传的是 RegExp 实例，不走包内解码
+  for (const rule of value) {
+    const pattern = patternOf(rule);
+    if (typeof pattern !== 'string' && patternIssue(pattern.source) !== null) return false;
+  }
   return !hasDuplicateString(value);
 }
 
