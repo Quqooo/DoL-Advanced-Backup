@@ -32,8 +32,6 @@ export interface CheckTree {
   selection(): Set<string>;
   preset(): Preset;
   applyPreset(preset: NamedPreset): void;
-  /** 存档引擎可能被用户在游戏里切换：档位判定要用最新值，不该等面板重建 */
-  setIdbActive(active: boolean): void;
   /**
    * 锁定判据变了（切模式、开关「保留本模组」）：按新判据重算每一行的可勾状态与提示。
    * 行的样式与提示是渲染时定下的，`sync` 只改勾选框，改不回这些。
@@ -44,8 +42,6 @@ export interface CheckTree {
 }
 
 export interface CheckTreeOptions {
-  /** 本机是否用 IndexedDB 存档，影响旧式存档在标准档的归属 */
-  idbActive?: boolean;
   /**
    * 不可勾的条目，返回原因（显示在行的悬停提示里）；返回 false 表示可勾。
    * 用于「包里有、但这台机器不该恢复」的条目，例如快照库。
@@ -104,7 +100,6 @@ type TreeEl = LeafEl | GroupEl;
 const keyOf = (node: Node): string => (node.kind === 'leaf' ? `l:${node.item.addr}` : `g:${node.id}`);
 
 export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
-  const ctx = { idbActive: options.idbActive !== false };
   const lockOf = (item: Item): string => {
     const reason = options.locked?.(item);
     return typeof reason === 'string' ? reason : '';
@@ -275,7 +270,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
     // 空集与全量档的集合相等，没法据此判断档位：没有条目就保持上一次的结果。
     // 分批加载期间只显示用户选的那一档，等条目齐了再按整个集合归位
     if (items.length > 0) {
-      shown = settled ? matchedPreset(selection, items, ctx) : intent;
+      shown = settled ? matchedPreset(selection, items) : intent;
       if (settled) intent = shown;
     }
     for (const [name, button] of buttons) {
@@ -292,7 +287,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
 
   function applyPreset(name: NamedPreset): void {
     intent = name;
-    selection = enforceForced(selectionOf(name, items, ctx), items);
+    selection = enforceForced(selectionOf(name, items), items);
     requestMeasure(items.filter(item => selection.has(item.addr)));
     sync();
   }
@@ -576,7 +571,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
       }
       selection = rest;
     } else {
-      selection = selectionOf(intent, items, ctx);
+      selection = selectionOf(intent, items);
     }
     selection = enforceForced(selection, items);
     render();
@@ -649,7 +644,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
         }
         selection = rest;
       } else {
-        selection = selectionOf(intent, items, ctx);
+        selection = selectionOf(intent, items);
       }
       selection = enforceForced(selection, items);
       render();
@@ -658,12 +653,6 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
     selection: () => new Set(selection),
     preset: () => shown,
     applyPreset,
-    setIdbActive(active) {
-      if (ctx.idbActive === active) return;
-      ctx.idbActive = active;
-      // 只改档位判定的依据，不动用户已经勾好的集合
-      sync();
-    },
     relock() {
       for (const record of rows.values()) {
         const reason = lockOf(record.item);

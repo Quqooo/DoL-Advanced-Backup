@@ -5,7 +5,7 @@ import { resetScan, SCAN_MAX_AGE_MS, scanExpired, session } from '../../app/sess
 import { formatBytes, formatTotal } from '../../core/format';
 import { measureFallback, type Item, type ScanResult } from '../../core/item';
 import type { Prefs } from '../../core/types';
-import { idbEngineActive, patchPrefs, readPrefs } from '../../app/prefs';
+import { patchPrefs, readPrefs } from '../../app/prefs';
 import { probeWasm } from '../../host/env';
 import { currentLang, t } from '../i18n';
 import { describeError } from '../error-text';
@@ -36,7 +36,7 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
   refresh.type = 'button';
   refresh.dataset.advbkRefresh = '1';
   noteRow.append(note, refresh);
-  const tree = createCheckTree({ idbActive: idbEngineActive(), onMeasure: measureList });
+  const tree = createCheckTree({ onMeasure: measureList });
   /** 当前这一轮的扫描结果：补量后要按它重画摘要与那几行 */
   let current: ScanResult | null = null;
   /** 重扫会让上一轮的补量结果作废：回来时对不上就丢掉 */
@@ -292,8 +292,6 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
     generation += 1;
     // force 的旧轮会在后台读完，它的结果不能再往这棵树上写
     const mine = generation;
-    // 用户可能刚在游戏里切过存档引擎：每次扫描前重取，旧式存档的档位归属才跟得上
-    tree.setIdbActive(idbEngineActive());
     tree.refresh();
     scanning = true;
     window.clearTimeout(freshnessTimer);
