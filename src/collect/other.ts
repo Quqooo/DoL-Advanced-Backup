@@ -1,5 +1,6 @@
 import { idbAddr, nameOfAddr, schemeOf } from '../core/address';
 import { groupOfKnown } from '../core/group';
+import { matches, selfEntry } from '../core/mapping';
 import { kindOfAddr, type Item } from '../core/item';
 import { listAddrs } from '../store/address';
 import { measureDatabase } from '../store/idb/dump';
@@ -41,10 +42,17 @@ export const otherCollector: Collector = {
         continue;
       }
 
+      // 模组采集器失败时，本模组自己的包也会落到这里；补上 self 标记，
+      // 「保留本模组」才不会在兜底路径上失效
+      const self = schemeOf(info.addr) === 'mod' ? selfEntry() : null;
+      const storedName = self ? nameOfAddr(info.addr) : null;
+      const flags = self && storedName !== null && matches(self.mod, storedName) ? { self: true as const } : undefined;
+
       items.push({
         addr: info.addr,
         kind,
         group,
+        ...(flags ? { flags } : {}),
         ...(info.bytes === undefined ? {} : { bytes: info.bytes }),
         ...(info.mtime === undefined ? {} : { mtime: info.mtime }),
         ...(info.count === undefined ? {} : { count: info.count }),

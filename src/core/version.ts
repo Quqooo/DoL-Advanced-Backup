@@ -8,7 +8,8 @@
 function parts(value: string | undefined): number[] {
   return String(value ?? '')
     .split('.')
-    .map(part => Number.parseInt(part, 10) || 0);
+    // 社区写法常见 `v1.2`：前导 v 不参与比较，否则整段会被 parseInt 读成 0
+    .map(part => Number.parseInt(part.replace(/^v/i, ''), 10) || 0);
 }
 
 /** 左比右：>0 左新，<0 左旧，0 相同 */
