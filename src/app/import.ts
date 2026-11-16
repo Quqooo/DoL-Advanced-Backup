@@ -4,7 +4,7 @@ import type { Item } from '../core/item';
 import { base64ToBytes } from '../core/format';
 import type { Progress } from '../core/progress';
 import { gameVersion } from '../host/env';
-import { waitForDbName } from '../host/game';
+import { dbNameReady, waitForDbName } from '../host/game';
 import { summarize } from '../restore/report';
 import { restorePackage } from '../restore';
 import type { RestoreFailure, RestorePlan } from '../restore/types';
@@ -111,7 +111,12 @@ export type ImportBundleRequest = Omit<ImportRequest, 'source' | 'bytes'> & { bu
 
 /** 从已经打开好的包恢复：导出包里内嵌的恢复脚本用这条，省掉重新序列化 zip */
 export async function importBundle(request: ImportBundleRequest): Promise<ImportResult> {
-  return runImport(request.bundle, request);
+  // 包内映射只在这次导入里有效：结束后清掉，免得后续分组与导出继续带着它
+  try {
+    return await runImport(request.bundle, request);
+  } finally {
+    clearPackMapping();
+  }
 }
 
 export async function importPackage(request: ImportRequest): Promise<ImportResult> {
@@ -120,7 +125,11 @@ export async function importPackage(request: ImportRequest): Promise<ImportResul
   request.onProgress?.({ phase: 'open', ratio: BAND.open[0] });
   const bundle = await openBundle(source);
   request.onProgress?.({ phase: 'open', ratio: BAND.open[1] });
-  return runImport(bundle, request);
+  try {
+    return await runImport(bundle, request);
+  } finally {
+    clearPackMapping();
+  }
 }
 
 /** 自动快照遇到不支持的类型时先问用户：跳过会留下不完整的回滚点 */
@@ -141,6 +150,8 @@ async function runImport(bundle: Bundle, request: Omit<ImportRequest, 'source' |
   useGameDb(await waitForDbName());
   const prefs = readPrefs();
   const mode = request.mode ?? prefs.restoreMode;
+  // 库名没定下来时干净恢复的删除边界不可信：拒绝执行，让用户重载后再试
+  if (mode === 'clean' && !dbNameReady()) throw messageError('dbNameUnknown');
   // 干净恢复的「保留本模组」：调用方没指定就跟随偏好（默认开）
   const keepSelf = request.keepSelf ?? prefs.keepSelf;
   const emit = (phase: Progress['phase'], ratio: number, label?: string): void => {
