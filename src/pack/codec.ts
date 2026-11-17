@@ -1,4 +1,5 @@
-import { deflateSync, inflateSync } from 'fflate';
+import { deflateSync } from 'fflate';
+import { inflateRaw } from '../core/deflate';
 import type { JsonSink } from '../core/jsonwrite';
 import { concatChunks } from '../core/sink';
 import type { ZipMethod } from '../core/zipread';
@@ -46,11 +47,6 @@ export function looksCompressed(bytes: Uint8Array): boolean {
   return false;
 }
 
-/** TS 把 Uint8Array 默认成带 SharedArrayBuffer 的泛型，BlobPart 只接受 ArrayBuffer 视图 */
-function blobPart(bytes: Uint8Array): BlobPart {
-  return bytes as unknown as BlobPart;
-}
-
 /** 送入压缩流的分块：足够大以减少调用开销，足够小以让进度每几 MB 更新一次 */
 const FEED_CHUNK = 4 * 1024 * 1024;
 
@@ -85,14 +81,6 @@ export async function deflateRaw(
   const packed = deflateSync(bytes, { level: 6 });
   onProgress?.(bytes.length);
   return packed;
-}
-
-export async function inflateRaw(bytes: Uint8Array): Promise<Uint8Array> {
-  if (typeof DecompressionStream === 'function') {
-    const stream = new Blob([blobPart(bytes)]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    return new Uint8Array(await new Response(stream).arrayBuffer());
-  }
-  return inflateSync(bytes);
 }
 
 /** 采样试压：压不动就别压，省时间也省不了体积 */

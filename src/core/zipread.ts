@@ -10,6 +10,7 @@
  */
 
 import { crc32 } from './crc32';
+import { tryInflateRaw } from './deflate';
 import { CENTRAL_SIZE, EOCD_SIZE, LOCAL_SIZE } from './zipstruct';
 
 /** 0 = STORE，8 = deflate，93 = zstd（本模组的 ZSTD 档） */
@@ -121,19 +122,6 @@ function dataStartOf(head: DataView): number {
   return LOCAL_SIZE + head.getUint16(26, true) + head.getUint16(28, true);
 }
 
-async function inflateRaw(data: Uint8Array): Promise<Uint8Array | null> {
-  if (typeof DecompressionStream !== 'function') return null;
-  try {
-    // 复制一份：subarray 可能是 SharedArrayBuffer 视图，Blob 只收 ArrayBuffer 视图
-    const copy = new Uint8Array(data.byteLength);
-    copy.set(data);
-    const stream = new Blob([copy]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    return new Uint8Array(await new Response(stream).arrayBuffer());
-  } catch {
-    return null;
-  }
-}
-
 /**
  * STORE 条目要复制一份再交出去。
  *
@@ -212,7 +200,7 @@ export async function readZipEntry(
     : entry.method === 0
       ? owned
       : entry.method === 8
-        ? await inflateRaw(owned)
+        ? await tryInflateRaw(owned)
         : null;
   return verifiedBytes(entry, decoded) ? decoded : null;
 }
@@ -317,7 +305,7 @@ export async function openZip(source: ZipSource): Promise<ZipIndex> {
         : entry.method === 0
           ? owned
           : entry.method === 8
-            ? await inflateRaw(owned)
+            ? await tryInflateRaw(owned)
             : null;
       if (verified.has(name)) return decoded;
       // null = 解不开（没有对应解码器、压缩方法不认识）：那是「读不了」，不是「内容坏了」
