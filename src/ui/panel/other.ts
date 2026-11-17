@@ -153,11 +153,54 @@ export function createOtherPane(deps: OtherPaneDeps): { el: HTMLElement } {
   el.appendChild(specSection);
 
   /**
-   * 全量时按模式分四张卡：每张一个模式、十行「数据项 → 行为」，比「一项一卡」少一半边框、也更整齐。
+   * 宽屏排成一张五列表：一行读完一种数据在四种模式下的行为，比四张卡少一半高度。
+   * 门槛取 700px：再窄最长的那几句要折成三行，不如退回分卡。手机上宽不到 700，走的就是分卡。
+   */
+  const TABLE_MIN = 700;
+  let wide = false;
+
+  /** 量的是面板自己的宽度：覆盖层随窗口缩放，视口宽不代表这里有位置 */
+  function fitsTable(): boolean {
+    return list.clientWidth >= TABLE_MIN;
+  }
+
+  /** 十种数据 × 四种模式：首列数据项，其余四列按 `MODES` 顺序 */
+  function specTable(): HTMLTableElement {
+    const table = dom('table', 'advbk-spec-table');
+    const head = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    // 左上角留空：首列内容自明，写「数据项」只是多一层噪音
+    headRow.appendChild(dom('th', ''));
+    for (const mode of MODES) {
+      const cell = dom('th', '', MODE_TEXT[mode]());
+      cell.scope = 'col';
+      headRow.appendChild(cell);
+    }
+    head.appendChild(headRow);
+    table.appendChild(head);
+
+    const body = document.createElement('tbody');
+    for (const row of SPEC) {
+      const tr = document.createElement('tr');
+      tr.dataset.advbkSpecRow = row.key;
+      const name = dom('th', '', t().specRows[row.key]);
+      name.scope = 'row';
+      tr.appendChild(name);
+      for (const mode of MODES) tr.appendChild(dom('td', '', t().specBehavior[row[mode]]));
+      body.appendChild(tr);
+    }
+    table.appendChild(body);
+    return table;
+  }
+
+  /**
+   * 全量时宽屏排表格、窄屏按模式分四张卡（每张十行「数据项 → 行为」）。
    * 筛了某个模式就收成清单，一项一行。
    */
   function renderSpec(): void {
+    const asTable = filter === null && fitsTable();
     list.classList.toggle('is-single', filter !== null);
+    list.classList.toggle('is-table', asTable);
     list.replaceChildren();
 
     if (filter !== null) {
@@ -170,6 +213,11 @@ export function createOtherPane(deps: OtherPaneDeps): { el: HTMLElement } {
         );
         list.appendChild(line);
       }
+      return;
+    }
+
+    if (asTable) {
+      list.appendChild(specTable());
       return;
     }
 
@@ -187,6 +235,28 @@ export function createOtherPane(deps: OtherPaneDeps): { el: HTMLElement } {
       list.appendChild(card);
     }
   }
+
+  // 表格与分卡是两套 DOM，跨过门槛只能重画。首次渲染时面板还没挂进 DOM、量到 0，
+  // 由这里在首次布局后纠正；隐藏分页的宽度也是 0，不能当成窄屏。
+  const observer = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(() => {
+      if (!el.isConnected) {
+        observer?.disconnect();
+        return;
+      }
+      const width = list.clientWidth;
+      if (width === 0) return;
+      const next = width >= TABLE_MIN;
+      if (next === wide) return;
+      wide = next;
+      if (filter !== null) return;
+      // 在 RO 回调里直接换结构会与它自己打架（ResizeObserver loop 警告），画到下一帧
+      window.requestAnimationFrame(() => {
+        if (el.isConnected) renderSpec();
+      });
+    })
+    : null;
+  observer?.observe(list);
 
   syncLang();
   syncFilter();
