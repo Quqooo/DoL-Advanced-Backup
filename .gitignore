@@ -14,3 +14,5 @@ scripts/e2e-matrix.mjs
 scripts/probes.mjs
 scripts/lib/unit.mjs
 scripts/lib/zip-info.mjs
+
+scripts/lib/samegraph.ts
