@@ -1,4 +1,5 @@
 import { PENDING_DROP_KEY } from '../core/constants';
+import { parseJson, stringifyJson } from '../core/json';
 import { readKey, removeKeys, writeKey } from './local';
 import { modKeys } from './modkeys';
 import { gameDbName } from './saves';
@@ -16,7 +17,8 @@ export function readPendingDrop(): string[] {
   if (raw === null) return [];
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    // 本模组自己写的键：用原始解析，游戏 2.37 起的标记还原不该作用在这里
+    parsed = parseJson(raw);
   } catch {
     return [];
   }
@@ -54,7 +56,7 @@ function save(names: readonly string[]): void {
     clearPendingDrop();
     return;
   }
-  writeKey(PENDING_DROP_KEY, JSON.stringify(names));
+  writeKey(PENDING_DROP_KEY, stringifyJson(names));
 }
 
 /**

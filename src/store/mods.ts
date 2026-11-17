@@ -1,5 +1,6 @@
 import { bytesToBase64 } from '../core/format';
 import { messageError } from '../core/error';
+import { stringifyJson } from '../core/json';
 import { close, deleteByKeys, ensureDb, getAllWithKeys, openDb, putRecords, request } from './idb';
 import { readKey, readLocal, removeKeys } from './local';
 import { localModKeys, modKeys, type ModKeys } from './modkeys';
@@ -29,6 +30,7 @@ export interface LocalMods {
 function parseList(raw: unknown): { values: string[]; valid: boolean } {
   if (typeof raw !== 'string') return { values: [], valid: false };
   try {
+    // 加载器写入的列表：解析跟着宿主走，2.37 起的 revive 标记按原类型还原
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return { values: [], valid: false };
     return { values: parsed.filter((item): item is string => typeof item === 'string'), valid: true };
@@ -359,7 +361,8 @@ export async function writeModList(name: 'order' | 'hidden', list: string[] | nu
       await deleteByKeys(db, store, [key]);
       return;
     }
-    await putRecords(db, store, [{ key, value: JSON.stringify(list) }]);
+    // 字符串数组用原始实现写：宿主 2.37 起的标记不会出现在列表里，字节与版本无关
+    await putRecords(db, store, [{ key, value: stringifyJson(list) }]);
   } finally {
     close(db);
   }

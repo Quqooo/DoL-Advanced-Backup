@@ -13,6 +13,7 @@ export function legacyHasSave(raw: string | null): boolean {
   if (raw === null) return false;
   let value: unknown;
   try {
+    // 游戏写入的键：解析跟着宿主走，2.37 起的 revive 标记按原类型还原
     value = JSON.parse(raw);
   } catch {
     return true;

@@ -1,5 +1,6 @@
 import { nameOfAddr } from '../../core/address';
 import { categoryOfGroup } from '../../core/item';
+import { parseJson } from '../../core/json';
 import { PROGRESS_FEATS } from '../../core/keys';
 import { writeAddr } from '../../store/address';
 import { readKey } from '../../store/local';
@@ -13,8 +14,14 @@ import { bump, fail, picked, type ApplyState } from './state';
  */
 function mergeFeatsValue(local: string, incoming: string): string {
   try {
+    // 结果要写回游戏存储：序列化用游戏自己的 JSON.stringify，2.37 起它负责写标记
     return JSON.stringify(
-      mergeFeats(JSON.parse(local) as Record<string, unknown>, JSON.parse(incoming) as Record<string, unknown>),
+      mergeFeats(
+        // 本机值由游戏写入：2.37 起带 revive 标记，要用游戏自己的 JSON.parse 还原类型
+        JSON.parse(local) as Record<string, unknown>,
+        // 包内值由本模组用原始实现写入，不含标记：必须用原始解析
+        parseJson(incoming) as Record<string, unknown>,
+      ),
     );
   } catch {
     return incoming;

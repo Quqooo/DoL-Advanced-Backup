@@ -8,7 +8,7 @@ import {
 } from '../../core/constants';
 import { messageError } from '../../core/error';
 import { categoryOfGroup } from '../../core/item';
-import { parseJson } from '../../core/json';
+import { parseJson, stringifyJson } from '../../core/json';
 import { findValueStart, jsonRange, splitElements, textOf, type JsonRange } from '../../core/jsonscan';
 import type { RestoreMode } from '../../core/types';
 import { createDecoder } from '../../pack/decode';
@@ -48,6 +48,7 @@ async function readLocalOrder(): Promise<string[] | null> {
     if (index < 0) return null;
     const raw = rows.values[index];
     if (typeof raw !== 'string') return null;
+    // 图像包模组自己写进 IDB 的记录：用游戏环境的 JSON.parse（2.37 起带标记还原）
     const parsed = JSON.parse(raw) as unknown;
     return Array.isArray(parsed) && parsed.every(item => typeof item === 'string') ? parsed : null;
   } catch {
@@ -67,11 +68,11 @@ async function mergeOrderRecord(section: DbSection): Promise<void> {
   const store = section.stores.find(entry => entry.name === IMAGE_ORDER_STORE);
   const record = store?.records.find(entry => entry.key === IMAGE_ORDER_KEY);
   if (!record || typeof record.value !== 'string') return;
-  const packed = JSON.parse(record.value) as unknown;
+  const packed = parseJson(record.value) as unknown;
   if (!Array.isArray(packed) || !packed.every(item => typeof item === 'string')) return;
   const local = await readLocalOrder();
   if (!local) return;
-  record.value = JSON.stringify(mergeOrderList(local, packed as string[]));
+  record.value = stringifyJson(mergeOrderList(local, packed as string[]));
 }
 
 /**

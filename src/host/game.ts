@@ -105,6 +105,7 @@ export function idbSettings(): IdbSettings {
   }
   if (!raw) return { ...DEFAULT_SETTINGS };
   try {
+    // 游戏自己写的设置：解析跟着宿主走，2.37 起的 revive 标记按原类型还原
     const parsed = JSON.parse(raw) as Partial<IdbSettings>;
     return {
       active: typeof parsed.active === 'boolean' ? parsed.active : DEFAULT_SETTINGS.active,
