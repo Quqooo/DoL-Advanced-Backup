@@ -1,5 +1,6 @@
 import { messageError } from './error';
-import { EOCD_SIZE, dosTime, localHeader, centralHeader, eocdRecord, type ZipEntryHeader } from './zipwrite';
+import { dosTime, localHeader, centralHeader, eocdRecord, type ZipEntryHeader } from './zipwrite';
+import { EOCD_SIZE, MAX_UINT32 } from './zipstruct';
 
 /**
  * 把成品包放进一个多卷 ZIP。
@@ -17,8 +18,6 @@ export interface SplitPart {
 
 /** 卷数上限：命名用两位序号，`.z01`–`.z99` */
 export const MAX_SPLIT_PARTS = 99;
-
-const MAX_UINT32 = 0xffffffff;
 
 /** `.z01`、`.z02`…，最后一卷是 `.zip` */
 function partName(entryName: string, index: number, count: number): string {

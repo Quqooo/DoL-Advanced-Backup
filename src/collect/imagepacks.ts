@@ -1,9 +1,9 @@
 import { idbAddr } from '../core/address';
-import { groupOfKnown } from '../core/group';
 import type { Item } from '../core/item';
 import { databases } from '../store/idb';
 import { measureDatabase } from '../store/idb/dump';
 import { imagePackKeys } from '../store/modkeys';
+import { measuredDbItem } from './dbitem';
 import type { CollectContext, Collector, CollectResult } from './index';
 
 /**
@@ -27,19 +27,8 @@ export const imagePackCollector: Collector = {
 
     for (const entry of order) {
       if (!present.has(entry.name)) continue;
-      const addr = idbAddr(entry.name);
       const measure = await measureDatabase(entry.name);
-      items.push({
-        addr,
-        kind: 'idb',
-        group: groupOfKnown(addr, ctx.group),
-        ...(measure && measure.complete
-          ? { bytes: measure.bytes, count: measure.count }
-          // 图像库动辄几十 MB：扫描时按预算截断，展开分组或勾选后再补量
-          : { sizeState: 'pending' as const }),
-        order: entry.order,
-        detail: measure?.stores.map(store => store.name) ?? [],
-      });
+      items.push(measuredDbItem(idbAddr(entry.name), ctx, measure, { order: entry.order }));
     }
 
     return { collector: 'imagepacks', items };

@@ -1,6 +1,6 @@
 import { LEGACY_SAVE_ADDR, lsAddr, saveAddr } from '../core/address';
 import { LEGACY_DETAILS_KEY, LEGACY_SAVES_KEY } from '../core/constants';
-import { textByteLength } from '../core/format';
+import { keyBytes, textByteLength } from '../core/format';
 import { groupOfKnown } from '../core/group';
 import type { Item } from '../core/item';
 import { legacyHasSave } from '../core/legacy';
@@ -50,7 +50,7 @@ export const savesCollector: Collector = {
         addr: LEGACY_SAVE_ADDR,
         kind: 'save-legacy',
         group: groupOfKnown(LEGACY_SAVE_ADDR, ctx.group),
-        bytes: textByteLength(legacy.saves) + textByteLength(legacy.details),
+        bytes: keyBytes(legacy.saves, legacy.details),
         detail: [LEGACY_SAVES_KEY, LEGACY_DETAILS_KEY],
       });
     }

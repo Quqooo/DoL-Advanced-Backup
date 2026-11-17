@@ -1,5 +1,5 @@
 import { lsAddr, ssAddr } from '../core/address';
-import { textByteLength } from '../core/format';
+import { keyBytes } from '../core/format';
 import { groupOfKnown } from '../core/group';
 import type { Item } from '../core/item';
 import { readKey } from '../store/local';
@@ -32,7 +32,7 @@ export function keyItem(
     addr,
     kind,
     group: groupOfKnown(addr, ctx.group),
-    bytes: textByteLength(spec.key) + textByteLength(value),
+    bytes: keyBytes(spec.key, value),
     ...(spec.order === undefined ? {} : { order: spec.order }),
   };
 }

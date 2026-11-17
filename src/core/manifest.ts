@@ -130,6 +130,11 @@ export interface Manifest {
 
 export type ManifestError = 'app' | 'format' | 'newer' | 'shape';
 
+/** 分区条目总数：导出回执与快照索引都按这一种算法报数 */
+export function entriesOf(manifest: Pick<Manifest, 'sections'>): number {
+  return manifest.sections.reduce((sum, section) => sum + section.entries, 0);
+}
+
 export type ParseResult = { ok: true; manifest: Manifest } | { ok: false; error: ManifestError };
 
 /** CRC32 一律 8 位小写十六进制；导出侧统一格式，读端只做字符串比较 */

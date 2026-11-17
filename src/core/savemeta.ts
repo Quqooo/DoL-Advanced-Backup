@@ -13,12 +13,16 @@ export function dateOf(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-/** `details.data.metadata.saveId`：游戏存档列表「ID/名称」那一列的数；缺了就不显示 */
-export function saveIdOf(value: unknown): number | undefined {
+/** `details.data.metadata`：两条取值共用同一层判据 */
+function metadataOf(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const metadata = (value as { metadata?: unknown }).metadata;
-  if (!metadata || typeof metadata !== 'object') return undefined;
-  const saveId = (metadata as { saveId?: unknown }).saveId;
+  return metadata && typeof metadata === 'object' ? metadata as Record<string, unknown> : undefined;
+}
+
+/** `details.data.metadata.saveId`：游戏存档列表「ID/名称」那一列的数；缺了就不显示 */
+export function saveIdOf(value: unknown): number | undefined {
+  const saveId = metadataOf(value)?.saveId;
   return typeof saveId === 'number' && Number.isFinite(saveId) ? saveId : undefined;
 }
 
@@ -29,9 +33,6 @@ export function saveIdOf(value: unknown): number | undefined {
  * 行上据此退回 `saveId`，两边的判断因此一致。
  */
 export function saveNameOf(value: unknown): string | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const metadata = (value as { metadata?: unknown }).metadata;
-  if (!metadata || typeof metadata !== 'object') return undefined;
-  const name = (metadata as { saveName?: unknown }).saveName;
+  const name = metadataOf(value)?.saveName;
   return typeof name === 'string' && name.trim().length > 0 ? name : undefined;
 }

@@ -11,7 +11,7 @@ import {
   saveAddr,
   ssAddr,
 } from '../core/address';
-import { textByteLength } from '../core/format';
+import { keyBytes } from '../core/format';
 import { legacyHasSave } from '../core/legacy';
 import { clearDatabase, databases } from './idb';
 import { writeDatabase, type DbDump } from './idb/dump';
@@ -166,14 +166,14 @@ export async function listAddrs(): Promise<AddrInfo[]> {
     out.push({
       addr: lsAddr(entry.key),
       label: entry.key,
-      bytes: textByteLength(entry.key) + textByteLength(entry.value),
+      bytes: keyBytes(entry.key, entry.value),
     });
   }
   for (const entry of readSession()) {
     out.push({
       addr: ssAddr(entry.key),
       label: entry.key,
-      bytes: textByteLength(entry.key) + textByteLength(entry.value),
+      bytes: keyBytes(entry.key, entry.value),
     });
   }
   const legacy = readLegacy();
@@ -182,7 +182,7 @@ export async function listAddrs(): Promise<AddrInfo[]> {
     out.push({
       addr: LEGACY_SAVE_ADDR,
       label: LEGACY_SAVE_ADDR,
-      bytes: textByteLength(legacy.saves) + textByteLength(legacy.details),
+      bytes: keyBytes(legacy.saves, legacy.details),
     });
   }
 

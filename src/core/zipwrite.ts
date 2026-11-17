@@ -1,8 +1,5 @@
 import type { ZipMethod } from './zipread';
-
-export const LOCAL_SIZE = 30;
-export const CENTRAL_SIZE = 46;
-export const EOCD_SIZE = 22;
+import { CENTRAL_SIZE, EOCD_SIZE, LOCAL_SIZE } from './zipstruct';
 
 const FLAG_UTF8 = 0x0800;
 

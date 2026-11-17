@@ -20,6 +20,12 @@ export interface MeasureBudget {
   maxBytes?: number;
 }
 
+/**
+ * 扫描时只量个大概：未识别的库、解析缓存动辄几十 MB，量到底会拖慢每次扫描。
+ * 没量完的条目记成待补量，展开分组或勾选后再全量。
+ */
+export const COARSE_MEASURE_BUDGET: MeasureBudget = { maxRecords: 200, maxBytes: 1024 * 1024 };
+
 /** 抽样估算：`bytes` 是按样本均值外推的，不是量出来的 */
 export interface DbEstimate {
   count: number;

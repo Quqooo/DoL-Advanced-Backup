@@ -102,6 +102,11 @@ export function textByteLength(text: string | null | undefined): number {
   return encoder.encode(text).length;
 }
 
+/** 键值条目的体积：键名与值都按 UTF-8 计 */
+export function keyBytes(key: string | null | undefined, value: string | null | undefined): number {
+  return textByteLength(key) + textByteLength(value);
+}
+
 /** 32 位整数写成 8 位小写十六进制：清单里的 CRC32 用这个形状 */
 export function hex32(value: number): string {
   return (value >>> 0).toString(16).padStart(8, '0');

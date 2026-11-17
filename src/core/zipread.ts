@@ -10,6 +10,7 @@
  */
 
 import { crc32 } from './crc32';
+import { CENTRAL_SIZE, EOCD_SIZE, LOCAL_SIZE } from './zipstruct';
 
 /** 0 = STORE，8 = deflate，93 = zstd（本模组的 ZSTD 档） */
 export type ZipMethod = 0 | 8 | 93;
@@ -36,9 +37,6 @@ interface CentralEntry extends ZipListEntry {
 const EOCD = 0x06054b50;
 const CENTRAL = 0x02014b50;
 const LOCAL = 0x04034b50;
-const CENTRAL_SIZE = 46;
-const LOCAL_SIZE = 30;
-const EOCD_SIZE = 22;
 /** 注释最长 65535，加 EOCD 本身；回溯不超过这个长度 */
 const TAIL = 65535 + EOCD_SIZE;
 

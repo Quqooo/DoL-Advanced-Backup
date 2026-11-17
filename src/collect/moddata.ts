@@ -1,13 +1,14 @@
 import { idbAddr, lsAddr, ssAddr } from '../core/address';
 import { modMatches, type BootMeta } from '../core/bootmeta';
-import { textByteLength } from '../core/format';
+import { keyBytes } from '../core/format';
 import { groupOfKnown } from '../core/group';
-import type { Item, ItemFlags } from '../core/item';
+import type { Item, ItemFlags, ItemKindId } from '../core/item';
 import { list as mappingList, matchesRule, selfEntry, type MappingEntry } from '../core/mapping';
 import { databases } from '../store/idb';
 import { measureDatabase } from '../store/idb/dump';
 import { readLocal, readSession, type StorageEntry } from '../store/local';
 import { bootMetas } from './bootmetas';
+import { measuredDbItem } from './dbitem';
 import type { CollectContext, Collector, CollectResult } from './index';
 
 function pick(entries: readonly StorageEntry[], rules: MappingEntry['keys']): StorageEntry[] {
@@ -51,29 +52,20 @@ export const modDataCollector: Collector = {
       };
       const flags = Object.keys(base).length > 0 ? base : undefined;
 
-      for (const entryKey of keys) {
-        const addr = lsAddr(entryKey.key);
-        const group = groupOfKnown(addr, ctx.group);
-        // 静态键（成就、设置、安全开关）归各自的分组，映射表抢不走
-        if (!group.startsWith('moddata/')) continue;
-        add({
-          addr,
-          kind: 'ls',
-          group,
-          bytes: textByteLength(entryKey.key) + textByteLength(entryKey.value),
-          ...(installed ? { groupSub: installed } : {}),
-          ...(flags ? { flags } : {}),
-        });
-      }
-      for (const entryKey of sessionHits) {
-        const addr = ssAddr(entryKey.key);
+      // 静态键（成就、设置、安全开关）归各自的分组，映射表抢不走
+      const stored: readonly (readonly [ItemKindId, StorageEntry])[] = [
+        ...keys.map(key => ['ls', key] as const),
+        ...sessionHits.map(key => ['ss', key] as const),
+      ];
+      for (const [kind, entryKey] of stored) {
+        const addr = kind === 'ss' ? ssAddr(entryKey.key) : lsAddr(entryKey.key);
         const group = groupOfKnown(addr, ctx.group);
         if (!group.startsWith('moddata/')) continue;
         add({
           addr,
-          kind: 'ss',
+          kind,
           group,
-          bytes: textByteLength(entryKey.key) + textByteLength(entryKey.value),
+          bytes: keyBytes(entryKey.key, entryKey.value),
           ...(installed ? { groupSub: installed } : {}),
           ...(flags ? { flags } : {}),
         });
@@ -81,21 +73,12 @@ export const modDataCollector: Collector = {
 
       const measured = await Promise.all(dbs.map(name => measureDatabase(name)));
       for (const [index, name] of dbs.entries()) {
-        const measure = measured[index];
         const addr = idbAddr(name);
-        const group = groupOfKnown(addr, ctx.group);
-        if (!group.startsWith('moddata/')) continue;
-        add({
-          addr,
-          kind: 'idb',
-          group,
-          ...(measure && measure.complete
-            ? { bytes: measure.bytes, count: measure.count }
-            : { sizeState: 'pending' as const }),
+        if (!groupOfKnown(addr, ctx.group).startsWith('moddata/')) continue;
+        add(measuredDbItem(addr, ctx, measured[index], {
           ...(installed ? { groupSub: installed } : {}),
-          detail: measure?.stores.map(store => store.name) ?? [],
           ...(flags ? { flags } : {}),
-        });
+        }));
       }
     }
 

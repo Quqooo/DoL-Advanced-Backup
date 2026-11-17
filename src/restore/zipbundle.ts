@@ -6,6 +6,7 @@ import type { ZipEntryLike, ZipLike } from '../host/self';
 import {
   BundleError,
   MANIFEST_IDS,
+  bundleOf,
   openBundle,
   verifyEntries,
   verifyIndex,
@@ -13,6 +14,7 @@ import {
   type ZipEntryMeta,
 } from './bundle';
 
+/** 清单是包内唯一直接解 JSON 的条目，其余走 `Bundle.readJson` */
 const decoder = new TextDecoder();
 
 /**
@@ -106,18 +108,5 @@ export async function bundleOfZip(zip: ZipLike): Promise<Bundle> {
   });
   if (!complete) throw new ZipBundleUnreadable('entry metadata');
 
-  return {
-    manifest: parsed.manifest,
-    names,
-    has: path => names.has(path),
-    read,
-    readJson: async <T>(path: string): Promise<T> => {
-      const data = await read(path);
-      try {
-        return parseJson(decoder.decode(data)) as T;
-      } catch {
-        throw new BundleError('json', 'bundleEntryJson', path);
-      }
-    },
-  };
+  return bundleOf(parsed.manifest, names, read);
 }

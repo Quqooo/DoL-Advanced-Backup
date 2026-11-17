@@ -1,4 +1,5 @@
 import { bytesToBase64 } from '../core/format';
+import { entriesOf } from '../core/manifest';
 import { gameVersion } from '../host/env';
 import { openSink, type SaveMethod } from '../host/download';
 import { readSelfScript } from '../host/self';
@@ -93,7 +94,7 @@ export async function exportPackage(request: ExportRequest = {}): Promise<Export
     request.onProgress?.({ phase: 'write', ratio: PACK_SHARE });
     await stream.close(result.name);
     request.onProgress?.({ phase: 'write', ratio: 1 });
-    const entries = result.manifest.sections.reduce((sum, section) => sum + section.entries, 0);
+    const entries = entriesOf(result.manifest);
     return {
       name: result.name,
       bytes: result.size,

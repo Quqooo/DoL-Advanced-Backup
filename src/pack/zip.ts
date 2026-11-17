@@ -2,7 +2,8 @@
 
 import type { ByteSink } from '../core/sink';
 import type { ZipMethod } from '../core/zipread';
-import { LOCAL_SIZE, CENTRAL_SIZE, EOCD_SIZE, dosTime, localHeader, centralHeader, eocdRecord, type ZipEntryHeader } from '../core/zipwrite';
+import { dosTime, localHeader, centralHeader, eocdRecord, type ZipEntryHeader } from '../core/zipwrite';
+import { CENTRAL_SIZE, EOCD_SIZE, LOCAL_SIZE, MAX_ENTRIES, MAX_UINT32 } from '../core/zipstruct';
 // CRC 放在 core：读端也要用它校验解出来的字节，而 core 不能引用 pack
 export { createCrc32, crc32, type Crc32 } from '../core/crc32';
 import { crc32 } from '../core/crc32';
@@ -25,9 +26,6 @@ export interface ZipEntry {
  * 超出上限时不会抛错，而是**静默溢出**：包能写出、能下载，安装时才发现无法读取。
  * 因此在这里提前失败，把「导出成功但装不上」变成明确的报错。
  */
-const MAX_UINT32 = 0xffffffff;
-const MAX_ENTRIES = 0xffff;
-
 function assertCapacity(what: string, value: number, limit: number): void {
   if (value > limit) throw new Error(`${what}超过 ${limit}，暂不支持 zip64`);
 }

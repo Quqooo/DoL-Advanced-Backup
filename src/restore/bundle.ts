@@ -37,6 +37,31 @@ export interface Bundle {
 
 const decoder = new TextDecoder();
 
+/**
+ * 由「条目名集合 + 读取函数」造 Bundle：两种来源只有这两处不同。
+ * 条目不存在与 JSON 解析失败都由 `read` 抛，分类码归各自的来源决定。
+ */
+export function bundleOf(
+  manifest: Manifest,
+  names: Set<string>,
+  read: (path: string) => Promise<Uint8Array>,
+): Bundle {
+  return {
+    manifest,
+    names,
+    has: path => names.has(path),
+    read,
+    readJson: async <T>(path: string): Promise<T> => {
+      const data = await read(path);
+      try {
+        return parseJson(decoder.decode(data)) as T;
+      } catch {
+        fail('json', 'bundleEntryJson', path);
+      }
+    },
+  };
+}
+
 /** `parseManifest` 的错误码 → 词条键；不认识的码原样透出（那是本模组没写过的失败） */
 export const MANIFEST_IDS: Record<string, string> = {
   app: 'bundleApp',
@@ -201,20 +226,7 @@ export async function openBundle(source: Uint8Array | Blob): Promise<Bundle> {
     return data;
   };
 
-  return {
-    manifest,
-    names,
-    has: path => names.has(path),
-    read,
-    readJson: async <T>(path: string): Promise<T> => {
-      const data = await read(path);
-      try {
-        return parseJson(decoder.decode(data)) as T;
-      } catch {
-        fail('json', 'bundleEntryJson', path);
-      }
-    },
-  };
+  return bundleOf(manifest, names, read);
 }
 
 /**

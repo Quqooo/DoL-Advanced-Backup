@@ -2,7 +2,7 @@ import { messageError } from '../core/error';
 import type { Item, ScanResult } from '../core/item';
 import { throwIfAborted } from '../core/error';
 import { byteLengthOf, formatCompactStamp } from '../core/format';
-import type { Manifest } from '../core/manifest';
+import { entriesOf, type Manifest } from '../core/manifest';
 import type { Progress } from '../core/progress';
 import { storageEstimate } from '../host/env';
 import { packBlob } from '../pack';
@@ -47,10 +47,6 @@ export interface SnapshotDraft {
 /** 列表要显示的三项：分区清单、条目数、字节数，都从 manifest 读取 */
 export function scopeOf(manifest: Manifest): string[] {
   return manifest.sections.map(section => section.id);
-}
-
-export function entriesOf(manifest: Manifest): number {
-  return manifest.sections.reduce((sum, section) => sum + section.entries, 0);
 }
 
 export function metaOf(manifest: Manifest, bytes: number, draft: SnapshotDraft): SnapshotMeta {

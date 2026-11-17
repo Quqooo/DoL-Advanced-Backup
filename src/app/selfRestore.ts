@@ -3,6 +3,7 @@ import { messageError } from '../core/error';
 import type { Progress } from '../core/progress';
 import { isRestorePack, selfMod, type SelfMod } from '../host/self';
 import { isModPack } from '../core/modpack';
+import { entriesOf } from '../core/manifest';
 import { bytesSource, openZip } from '../core/zipread';
 import { decodeEntry } from '../pack/codec';
 import { sha256Hex } from '../pack/blob';
@@ -91,7 +92,7 @@ export async function loadRestorePack(mod: SelfMod | null = selfMod()): Promise<
     bundle,
     game: bundle.manifest.game,
     modVersion: bundle.manifest.mod,
-    entries: bundle.manifest.sections.reduce((sum, section) => sum + section.entries, 0),
+    entries: entriesOf(bundle.manifest),
   };
 }
 

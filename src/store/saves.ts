@@ -6,6 +6,7 @@ import {
   SAVE_STORE,
 } from '../core/constants';
 import { messageError } from '../core/error';
+import { dateOf } from '../core/savemeta';
 import { abortQuietly, close, ensureDb, getAll, openDb } from './idb';
 import { readKey } from './local';
 
@@ -72,8 +73,7 @@ export function readLegacy(): { saves: string | null; details: string | null } {
 export function detailTime(record: { data?: unknown } | undefined): number {
   const data = record?.data;
   if (typeof data !== 'object' || data === null) return 0;
-  const value = (data as Record<string, unknown>).date;
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  return dateOf((data as Record<string, unknown>).date) ?? 0;
 }
 
 /**
