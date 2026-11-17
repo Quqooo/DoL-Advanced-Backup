@@ -335,7 +335,8 @@ const DELTA_FLOOR = '0.5.6.10';
 /**
  * 软依赖只提示、不阻断，最终行为由用户负责。
  *
- * 目前只有单元测试使用：界面尚未接入这条提示。
+ * 返回逐条明细，界面按类型汇总（见 `ui/panel/hints.ts`）。`gameVersion` 为空表示
+ * 读不到版本号：这时不猜「低于下限」，否则每次都会误报 delta。
  */
 export function softWarnings(
   selection: ReadonlySet<string>,
@@ -350,7 +351,8 @@ export function softWarnings(
     if (item.kind === 'mod' && (item.flags?.injected || item.flags?.remote)) {
       out.push({ code: 'sideload-mod', addr: item.addr });
     }
-    if (item.kind === 'save' && item.flags?.delta && compareVersion(ctx.gameVersion, DELTA_FLOOR) < 0) {
+    if (item.kind === 'save' && item.flags?.delta && ctx.gameVersion
+      && compareVersion(ctx.gameVersion, DELTA_FLOOR) < 0) {
       out.push({ code: 'delta-downgrade', addr: item.addr });
     }
     if (categoryOfGroup(item.group) === 'other') {

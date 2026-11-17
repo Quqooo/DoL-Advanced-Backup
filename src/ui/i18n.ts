@@ -121,6 +121,19 @@ export interface Strings {
   phaseText: (phase: ProgressPhase) => string;
   warningCount: (count: number) => string;
   deletableCount: (count: number) => string;
+  /**
+   * 软依赖提示：导出与恢复前按类型汇总，参数是该类型的条数。
+   * 只用「标签：数量」的形状，省掉单复数与语序差异。
+   */
+  hintDeltaDowngrade: (count: number) => string;
+  hintSideloadMod: (count: number) => string;
+  hintOrphanData: (count: number) => string;
+  hintUnknownData: (count: number) => string;
+  /** 上面四条提示的悬停说明：讲后果，不给建议 */
+  hintDeltaDowngradeTip: string;
+  hintSideloadModTip: string;
+  hintOrphanDataTip: string;
+  hintUnknownDataTip: string;
   snapshotNew: string;
   snapshotNone: string;
   snapshotMissing: string;
@@ -410,6 +423,14 @@ const ZH: Strings = {
     })[phase],
   warningCount: count => `${count} 条警告`,
   deletableCount: count => `本机会删除 ${count} 项`,
+  hintDeltaDowngrade: count => `带增量段的存档：${count}（本机游戏版本低于 0.5.6.10）`,
+  hintSideloadMod: count => `旁加载或远程模组：${count}（不在本机加载列表里）`,
+  hintOrphanData: count => `找不到所属模组的模组数据：${count}`,
+  hintUnknownData: count => `未识别的数据：${count}`,
+  hintDeltaDowngradeTip: '增量段从游戏 0.5.6.10 起才有。恢复到更低版本时，这些存档打不开。',
+  hintSideloadModTip: '这些模组来自远程列表或构建注入。恢复后要手动放进 ModLoader 的加载列表，否则不会加载。',
+  hintOrphanDataTip: '映射表认识这些数据，但本机没有对应的模组。勾选的条目照常处理；恢复后可能没有模组读取它们。',
+  hintUnknownDataTip: '本模组不认识这些条目，会按原样处理。',
   snapshotNew: '新建快照',
   snapshotNone: '暂无',
   snapshotMissing: '快照不存在或已损坏',
@@ -800,6 +821,14 @@ const EN: Strings = {
     })[phase],
   warningCount: count => `${count} warnings`,
   deletableCount: count => `${count} items will be deleted here`,
+  hintDeltaDowngrade: count => `Delta saves: ${count} (this game is below 0.5.6.10)`,
+  hintSideloadMod: count => `Sideloaded or remote mods: ${count} (not in the load list here)`,
+  hintOrphanData: count => `Mod data with no installed mod: ${count}`,
+  hintUnknownData: count => `Unidentified data: ${count}`,
+  hintDeltaDowngradeTip: 'Delta sections exist since game 0.5.6.10. On an older version these saves cannot be opened.',
+  hintSideloadModTip: 'These mods come from a remote list or from the build. After a restore, add them to the ModLoader load list or they will not load.',
+  hintOrphanDataTip: 'The mapping table knows this data, but no matching mod is installed. Selected items are handled as usual, and may have no reader after a restore.',
+  hintUnknownDataTip: 'This mod does not know these entries. They are handled as they are.',
   snapshotNew: 'New Snapshot',
   snapshotNone: 'None',
   snapshotMissing: 'Snapshot missing or corrupted',

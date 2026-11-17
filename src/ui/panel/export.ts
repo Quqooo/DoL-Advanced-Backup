@@ -6,14 +6,16 @@ import { formatBytes, formatTotal } from '../../core/format';
 import { measureFallback, type Item, type ScanResult } from '../../core/item';
 import type { Prefs } from '../../core/types';
 import { patchPrefs, readPrefs } from '../../app/prefs';
-import { probeWasm } from '../../host/env';
+import { probeWasm, gameVersion } from '../../host/env';
 import { currentLang, t } from '../i18n';
 import { describeError } from '../error-text';
 import { dom } from './dom';
 import { createNotices, toast } from './feedback';
 import type { TaskGate } from './gate';
+import { createHints } from './hints';
 import { createProgress } from './progress';
 import { createCheckTree } from './tree';
+import { softWarnings } from './tree/model';
 
 export interface ExportPaneDeps {
   gate: TaskGate;
@@ -36,7 +38,8 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
   refresh.type = 'button';
   refresh.dataset.advbkRefresh = '1';
   noteRow.append(note, refresh);
-  const tree = createCheckTree({ onMeasure: measureList });
+  const hints = createHints();
+  const tree = createCheckTree({ onMeasure: measureList, onChange: renderHints });
   /** 当前这一轮的扫描结果：补量后要按它重画摘要与那几行 */
   let current: ScanResult | null = null;
   /** 重扫会让上一轮的补量结果作废：回来时对不上就丢掉 */
@@ -196,6 +199,15 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
     syncLocked();
   });
 
+  /** 软依赖提示跟着勾选变：只讲后果，不改勾选、不拦导出 */
+  function renderHints(): void {
+    if (!current) {
+      hints.render([], []);
+      return;
+    }
+    hints.render(softWarnings(tree.selection(), current.items, { gameVersion: gameVersion() }), current.items);
+  }
+
   function renderErrors(result: ScanResult): void {
     errors.replaceChildren();
     for (const [name, message] of Object.entries(result.errors)) {
@@ -292,6 +304,8 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
     // force 的旧轮会在后台读完，它的结果不能再往这棵树上写
     const mine = generation;
     tree.refresh();
+    // 旧结果不作数：提示先收掉，等新一轮扫描的 `apply` 再按新条目算
+    hints.render([], []);
     scanning = true;
     window.clearTimeout(freshnessTimer);
     syncLocked();
@@ -368,7 +382,7 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
       });
   });
 
-  el.append(noteRow, tree.el, errors, optionsSection, progress.el, notices.el, scanNotice.el, actions);
+  el.append(noteRow, tree.el, errors, optionsSection, hints.el, progress.el, notices.el, scanNotice.el, actions);
   actions.append(exporter);
   // 会话里还留着扫描结果就直接画出来。重建面板（换语言）时缓存不为空，
   // `refreshIfStale` 据此不会重扫，新面板就会一直停在「读取中…」——这里补上。

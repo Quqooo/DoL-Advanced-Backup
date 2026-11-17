@@ -170,6 +170,30 @@
 	color: var(--advbk-text);
 }
 
+/* 软依赖提示：导出 / 恢复前的常驻一栏，按类型一行，只提示不拦操作 */
+.advbk-hints {
+	margin: 0 12px 12px;
+	border: 1px solid var(--advbk-border-soft);
+	border-left: 2px solid var(--advbk-accent);
+	border-radius: 3px;
+	background: var(--advbk-accent-soft);
+}
+
+.advbk-hints:empty {
+	display: none;
+}
+
+.advbk-hint {
+	padding: 6px 12px;
+	color: var(--advbk-text);
+	font-size: 12px;
+	line-height: 1.45;
+}
+
+.advbk-hint + .advbk-hint {
+	border-top: 1px solid var(--advbk-border-soft);
+}
+
 /* 预设、合计与树构成同一块工具面板。 */
 .advbk-tree {
 	margin: 0 12px 12px;

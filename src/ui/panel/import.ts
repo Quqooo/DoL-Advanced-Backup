@@ -4,6 +4,7 @@ import { snapshotList, snapshotSource } from '../../app/snapshots';
 import { byteLengthOf, formatBytes, formatDateTime } from '../../core/format';
 import type { Category, RestoreMode } from '../../core/types';
 import type { RestorePlan } from '../../restore/types';
+import { gameVersion } from '../../host/env';
 import { confirmDialog } from '../../host/dialog';
 import { patchPrefs, readPrefs } from '../../app/prefs';
 import { t } from '../i18n';
@@ -11,10 +12,12 @@ import { describeError, failureLines } from '../error-text';
 import { dom } from './dom';
 import { createNotices, toast } from './feedback';
 import type { TaskGate } from './gate';
+import { createHints } from './hints';
 import { MODE_NOTE, MODES, MODE_TEXT } from './modes';
 import { createProgress } from './progress';
 import { createSourceRun } from './source-run';
 import { createCheckTree } from './tree';
+import { softWarnings } from './tree/model';
 import { isSnapshotAddr } from '../../core/presets';
 
 export interface ImportPaneDeps {
@@ -67,6 +70,7 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
 
   // 恢复时不写快照库（见 restore/plan/index.ts 的 skipsDb）。它属于本模组的数据，
   // 只有在干净恢复里关掉「保留本模组」才会进删除范围——那时才允许勾选，勾上就是「留着」。
+  const hints = createHints();
   const tree = createCheckTree({
     locked: item => {
       if (!isSnapshotAddr(item.addr)) return false;
@@ -194,7 +198,17 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     return deletionsOf(plan, tree.selection(), keepSelfBox.checked);
   }
 
+  /** 软依赖提示跟着勾选变：只讲后果，不改勾选、不拦恢复 */
+  function renderHints(): void {
+    if (!plan) {
+      hints.render([], []);
+      return;
+    }
+    hints.render(softWarnings(tree.selection(), plan.items, { gameVersion: gameVersion() }), plan.items);
+  }
+
   function refreshSummary(): void {
+    renderHints();
     if (!plan) return;
     summary.textContent = summaryText();
     summary.dataset.advbkForecast = JSON.stringify(forecast());
@@ -453,7 +467,7 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     })();
   });
 
-  el.append(sourceSection, picker, summary, warningNote, tree.el, modeNote, restoreOptions, progress.el, notices.el, actions);
+  el.append(sourceSection, picker, summary, warningNote, tree.el, modeNote, restoreOptions, hints.el, progress.el, notices.el, actions);
   setMode(mode);
   syncLocked();
   return {
