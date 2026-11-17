@@ -117,7 +117,6 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
   const skip = dom('label', 'advbk-option advbk-check');
   const skipBox = document.createElement('input');
   skipBox.type = 'checkbox';
-  skipBox.dataset.advbkSkip = '1';
   skipBox.checked = prefs.skipCompressed;
   skipBox.addEventListener('change', () => {
     patchPrefs({ skipCompressed: skipBox.checked });

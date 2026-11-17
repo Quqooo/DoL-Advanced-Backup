@@ -51,7 +51,6 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
   sourceSection.append(sourceNote, sourceRow);
   const pickFile = dom('button', 'link-internal macro-button', t().sourceFile);
   pickFile.type = 'button';
-  pickFile.dataset.advbkPickFile = '1';
   const picker = document.createElement('input');
   picker.type = 'file';
   picker.accept = '.zip,application/zip';
@@ -126,7 +125,6 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
   const autoRow = dom('label', 'advbk-option advbk-check');
   const autoBox = document.createElement('input');
   autoBox.type = 'checkbox';
-  autoBox.dataset.advbkAutoSnapshot = '1';
   autoBox.checked = prefs.autoSnapshot;
   autoBox.addEventListener('change', () => {
     patchPrefs({ autoSnapshot: autoBox.checked });

@@ -478,7 +478,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
     record.children = slice.map(child => (child.kind === 'leaf' ? renderLeaf(child.item) : renderGroup(child)));
     record.content.append(
       ...record.children.map(child => child.el),
-      pagerNav(node, page, pageCount(node), {
+      pagerNav(page, pageCount(node), {
         onGo: next => {
           pages.set(node.id, next);
           renderPage(node.id);

@@ -10,8 +10,6 @@ export const MANIFEST_APP = 'AdvancedBackup';
  */
 export const FORMAT_WRITE = 2;
 export const FORMAT_MIN_READ = 1;
-/** 当前写入的格式号；读端接受 `FORMAT_MIN_READ..FORMAT_WRITE` */
-export const FORMAT = FORMAT_WRITE;
 
 export interface ManifestOptions {
   compression: 'standard' | 'none' | 'zstd';

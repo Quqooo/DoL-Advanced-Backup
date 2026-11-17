@@ -33,7 +33,6 @@ export const IMAGE_STORE_DB = 'BeautySelectorAddon_dbNameImageStore';
  * 内容能从模组包重建，不进任何预设。
  */
 export const NEO_CACHE_DB = 'ModLoaderNeoCache';
-export const NEO_CACHE_STORE = 'parsedModInfo';
 
 /** 自动快照保留与显示的默认槽位数 */
 export const AUTO_KEEP = 3;

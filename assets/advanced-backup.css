@@ -576,15 +576,6 @@
 	white-space: nowrap;
 }
 
-.advbk-row-disabled {
-	opacity: .42;
-	cursor: not-allowed;
-}
-
-.advbk-row-disabled:hover {
-	background: transparent;
-}
-
 .advbk-pagination {
 	display: flex;
 	align-items: center;

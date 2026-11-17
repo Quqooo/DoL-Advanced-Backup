@@ -45,10 +45,6 @@ export function formatCompactStamp(date: Date): string {
   return `${day}-${time}`;
 }
 
-export function formatCount(value: number): string {
-  return value.toLocaleString('en-US');
-}
-
 /**
  * 合计的体积：有没量到的项就写成下界，全都量到但有抽样估算就写约等于，一项都没有就写 `—`。
  *

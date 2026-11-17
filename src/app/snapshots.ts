@@ -83,11 +83,6 @@ export async function snapshotSource(id: number): Promise<Uint8Array | Blob | nu
   return loaded?.payload ?? null;
 }
 
-export async function snapshotBytes(id: number): Promise<Uint8Array | null> {
-  const loaded = await loadSnapshot(id);
-  return loaded ? await bytesOfPayload(loaded.payload) : null;
-}
-
 /** e2e 与排查用：快照 payload 直接给 base64，省掉落盘 */
 export async function snapshotBase64(id: number): Promise<{ name: string; base64: string } | null> {
   const loaded = await loadSnapshot(id);

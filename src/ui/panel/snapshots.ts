@@ -47,7 +47,6 @@ export function createSnapshotPane(deps: SnapshotPaneDeps): { el: HTMLElement; r
   const note = dom('span', 'advbk-note-text', t().loading);
   const refresh = dom('button', 'advbk-textlink', t().refresh);
   refresh.type = 'button';
-  refresh.dataset.advbkSnapshotRefresh = '1';
   noteRow.append(note, refresh);
 
   const body = dom('div', 'advbk-body');

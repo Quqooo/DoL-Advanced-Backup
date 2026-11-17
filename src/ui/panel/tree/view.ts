@@ -205,9 +205,8 @@ export interface PagerHooks {
  * 跳页要落回这个分组的页码记录再重绘，所以输入框不是独立控件，而是标签的临时形态。
  * 越界按边界夹住（输 99 就去最后一页），非数字或空值原样退回。
  */
-function pagerLabel(node: GroupNode, page: number, pagesCount: number, hooks: PagerHooks): HTMLElement {
+function pagerLabel(page: number, pagesCount: number, hooks: PagerHooks): HTMLElement {
   const label = dom('span', 'advbk-page-label advbk-page-jump', t().pageOf(page + 1, pagesCount));
-  label.dataset.advbkPageJump = node.id;
   label.setAttribute('role', 'button');
   label.tabIndex = 0;
   label.title = t().pageJumpHint;
@@ -218,7 +217,6 @@ function pagerLabel(node: GroupNode, page: number, pagesCount: number, hooks: Pa
     input.inputMode = 'numeric';
     input.autocomplete = 'off';
     input.className = 'advbk-page-input';
-    input.dataset.advbkPageInput = node.id;
     input.value = String(page + 1);
     input.setAttribute('aria-label', t().pageJumpHint);
 
@@ -260,7 +258,6 @@ function pagerLabel(node: GroupNode, page: number, pagesCount: number, hooks: Pa
 }
 
 export function pagerNav(
-  node: GroupNode,
   page: number,
   pagesCount: number,
   hooks: PagerHooks,
@@ -268,14 +265,12 @@ export function pagerNav(
   const nav = dom('div', 'advbk-pagination');
   const previous = dom('button', 'advbk-page-button', t().previousPage);
   previous.type = 'button';
-  previous.dataset.advbkSavePage = 'previous';
   previous.disabled = page === 0;
   previous.addEventListener('click', () => hooks.onGo(Math.max(0, page - 1)));
   const next = dom('button', 'advbk-page-button', t().nextPage);
   next.type = 'button';
-  next.dataset.advbkSavePage = 'next';
   next.disabled = page >= pagesCount - 1;
   next.addEventListener('click', () => hooks.onGo(Math.min(pagesCount - 1, page + 1)));
-  nav.append(previous, pagerLabel(node, page, pagesCount, hooks), next);
+  nav.append(previous, pagerLabel(page, pagesCount, hooks), next);
   return nav;
 }

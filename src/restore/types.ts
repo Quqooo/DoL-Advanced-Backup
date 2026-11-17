@@ -113,5 +113,3 @@ export interface RestoreReport {
   /** 模组或存档引擎有变动，需要重载页面才生效 */
   needsReload: boolean;
 }
-
-export type BlobLookup = (file: string) => Uint8Array | null;

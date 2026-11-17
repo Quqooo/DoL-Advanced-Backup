@@ -41,7 +41,6 @@ export function createNotices(): Notices {
     body.title = detail ?? text;
     const dismiss = dom('button', 'advbk-textlink', t().noticeDismiss);
     dismiss.type = 'button';
-    dismiss.dataset.advbkNoticeDismiss = '1';
     dismiss.addEventListener('click', () => {
       shown.delete(key);
       row.remove();

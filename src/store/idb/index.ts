@@ -217,12 +217,6 @@ function writeTx(
   });
 }
 
-export function putAll(db: IDBDatabase, store: string, records: readonly unknown[]): Promise<void> {
-  return writeTx(db, store, 'write', objectStore => {
-    for (const record of records) objectStore.put(record);
-  });
-}
-
 /** 带键写：out-of-line 的仓库（keyPath 为 null）只能这样写 */
 export function putRecords(
   db: IDBDatabase,

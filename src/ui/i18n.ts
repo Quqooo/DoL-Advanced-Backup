@@ -16,7 +16,6 @@ export interface Strings {
   exportAction: string;
   exporting: string;
   exported: (name: string, size: string, selfRestore: boolean) => string;
-  importAction: string;
   reading: string;
   /** 读包 / 扫描边收边报：已经找到多少条 */
   readingFound: (count: number) => string;
@@ -281,7 +280,6 @@ const ZH: Strings = {
   exportAction: '导出备份',
   exporting: '打包中…',
   exported: (name, size, selfRestore) => `已导出 ${name} · ${size}${selfRestore ? ' · 可自恢复' : ''}`,
-  importAction: '导入',
   reading: '读取包…',
   readingFound: count => `读取包… 已找到 ${count} 项`,
   scanning: count => `正在扫描… 已找到 ${count} 项`,
@@ -672,7 +670,6 @@ const EN: Strings = {
   exportAction: 'Export Backup',
   exporting: 'Packing…',
   exported: (name, size, selfRestore) => `Exported ${name} · ${size}${selfRestore ? ' · self-restoring' : ''}`,
-  importAction: 'Import',
   reading: 'Reading package…',
   readingFound: count => `Reading package… ${count} items found`,
   scanning: count => `Scanning… ${count} items found`,

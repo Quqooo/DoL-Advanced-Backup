@@ -41,9 +41,3 @@ export const NEO_UI_SETTINGS = 'modloader-neo-ui-settings';
 export const NEO_UI_TAB = 'modloader-neo-ui-tab';
 export const NEO_UI_SPELL_HISTORY = 'modloader-neo-ui-spell-history';
 export const NEO_UI_HOT_RELOAD = 'modloader-neo-ui-hot-reload';
-
-export const NEO_UI_KEYS: readonly string[] = [
-  NEO_UI_SETTINGS,
-  NEO_UI_TAB,
-  NEO_UI_SPELL_HISTORY,
-];

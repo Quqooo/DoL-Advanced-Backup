@@ -125,14 +125,6 @@ export const VIEW_TYPES: ReadonlySet<string> = new Set([
   'DataView',
 ]);
 
-/** 标记键只认自有属性：原型链上的同名键不算 */
-export function markerOf(record: Record<string, unknown>): string | null {
-  for (const key of Object.keys(record)) {
-    if (key.startsWith(PREFIX)) return key;
-  }
-  return null;
-}
-
 export function unsupported(type: string, path: string): never {
   throw messageError('unsupportedValue', type, path);
 }
