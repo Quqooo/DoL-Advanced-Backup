@@ -14,8 +14,9 @@ export const MAPPING: readonly MappingEntry[] = [
   {
     mod: 'AdvancedBackup',
     label: 'mapAdvbk',
-    // 角标只影响显示：设置与快照库同属本模组，分组仍是同一个
-    keys: [{ match: 'AdvancedBackup:settings', badge: 'badgeSettings' }],
+    // 角标只影响显示：设置与快照库同属本模组，分组仍是同一个。
+    // 空壳库的待删标记也要认领：认领了才带 self 标记，快照才不会被它写回去
+    keys: ['AdvancedBackup:pendingDrop', { match: 'AdvancedBackup:settings', badge: 'badgeSettings' }],
     dbs: [{ match: 'AdvancedBackup', badge: 'badgeSnapshot' }],
   },
   {
