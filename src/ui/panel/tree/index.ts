@@ -163,7 +163,13 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
   /** 清空前勾着的地址：自定义档重扫时按它把勾选接回来 */
   let carry: Set<string> | null = null;
 
-  const rows = new Map<string, { input: HTMLInputElement; item: Item; row: HTMLElement }>();
+  interface RowRegistration {
+    owner: LeafEl;
+    input: HTMLInputElement;
+    item: Item;
+    row: HTMLElement;
+  }
+  const rows = new Map<string, RowRegistration>();
   const groupEls = new Map<string, GroupEl>();
   let rootEls: TreeEl[] = [];
   const expanded = new Map<string, boolean>();
@@ -360,8 +366,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
 
   function renderLeaf(item: Item): LeafEl {
     const built = leafNode(item, leafHooks);
-    rows.set(item.addr, { input: built.input, item, row: built.row });
-    return {
+    const record: LeafEl = {
       kind: 'leaf',
       key: `l:${item.addr}`,
       addr: item.addr,
@@ -369,6 +374,8 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
       el: built.el,
       input: built.input,
     };
+    rows.set(item.addr, { owner: record, input: built.input, item, row: built.row });
+    return record;
   }
 
   /**
@@ -387,7 +394,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
     record.el = built.el;
     record.input = built.input;
     record.item = item;
-    rows.set(item.addr, { input: built.input, item, row: built.row });
+    rows.set(item.addr, { owner: record, input: built.input, item, row: built.row });
   }
 
   /** 当前页：数据减少时回到最后一页，避免停在空页上 */
@@ -529,7 +536,8 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
   function drop(record: TreeEl): void {
     record.el.remove();
     if (record.kind === 'leaf') {
-      rows.delete(record.addr);
+      // 跨组移动时新节点先登记、旧节点后注销，只能移除属于旧节点的记录
+      if (rows.get(record.addr)?.owner === record) rows.delete(record.addr);
       return;
     }
     groupEls.delete(record.node.id);
