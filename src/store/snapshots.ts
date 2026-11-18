@@ -104,6 +104,7 @@ export async function updateSnapshotMeta(meta: SnapshotMeta): Promise<void> {
       tx.objectStore(SNAP_META_STORE).put(meta);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error ?? messageError('snapshotMetaFailed'));
+      tx.onabort = () => reject(tx.error ?? messageError('snapshotMetaFailed'));
     });
   } finally {
     db.close();
@@ -129,6 +130,7 @@ export async function deleteSnapshot(id: number): Promise<void> {
       tx.objectStore(SNAP_PAYLOAD_STORE).delete(id);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error ?? messageError('snapshotDeleteFailed'));
+      tx.onabort = () => reject(tx.error ?? messageError('snapshotDeleteFailed'));
     });
   } finally {
     db.close();

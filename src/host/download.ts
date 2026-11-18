@@ -123,9 +123,10 @@ function fileStream(handle: any): SaveStream {
     },
     async close() {
       if (done) return;
-      done = true;
       const target = await open();
       await target.close();
+      // 只有成功落定才进入终态：close 失败后仍须允许 abort 清理可写会话
+      done = true;
     },
     async abort() {
       if (done) return;
