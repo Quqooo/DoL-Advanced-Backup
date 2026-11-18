@@ -1,6 +1,6 @@
 import { base64ToBytes } from '../core/format';
 import { messageError } from '../core/error';
-import { BlobTable } from './blob';
+import { BlobTable, type PackedRange } from './blob';
 import {
   ARR,
   assertEncodedBudget,
@@ -227,9 +227,9 @@ function encodeNode(value: unknown, blobs: BlobTable, ctx: Context, path: string
   if (typeof value === 'string') {
     const dataUrl = parseDataUrl(value);
     if (!dataUrl) return value;
-    return blobs.addDataUrl(dataUrl.bytes).then(range => ({
-      [BLOB]: range.file,
-      [RANGE]: [range.offset, range.length],
+    return blobs.addDataUrl(dataUrl.bytes).then(({ file, range }) => ({
+      [BLOB]: file,
+      [RANGE]: range,
       [MIME]: dataUrl.mime,
     }));
   }
@@ -459,6 +459,31 @@ export function collectBlobRefs(value: unknown, into: Set<string>): void {
     if (key === BLOB) continue;
     collectBlobRefs(item, into);
   }
+}
+
+/** 条目被整体放弃后，按存活 range 回收打包图片；必须在分区序列化前调用 */
+export function compactPackedRefs(value: unknown, blobs: BlobTable): void {
+  const live = new Set<PackedRange>();
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (!isRecord(node)) return;
+    if (isRecord(node[OBJ])) {
+      for (const item of Object.values(node[OBJ] as Record<string, unknown>)) visit(item);
+      return;
+    }
+    if (typeof node[BLOB] === 'string' && Array.isArray(node[RANGE])) {
+      const range = node[RANGE];
+      if (range.length === 2 && range.every(part => typeof part === 'number')) live.add(range as PackedRange);
+    }
+    for (const [key, item] of Object.entries(node)) {
+      if (key !== BLOB && key !== RANGE) visit(item);
+    }
+  };
+  visit(value);
+  blobs.retainPacked(live);
 }
 
 export type { BlobResolver } from './graph';

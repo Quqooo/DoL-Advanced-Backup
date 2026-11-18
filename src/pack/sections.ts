@@ -21,7 +21,7 @@ import { readLocal, readSession } from '../store/local';
 import { readIdbModLists } from '../store/mods';
 import { readDetails, readLegacy, readSaves } from '../store/saves';
 import type { BlobTable } from './blob';
-import { encodeValue, collectBlobRefs } from './encode';
+import { encodeValue, collectBlobRefs, compactPackedRefs } from './encode';
 import { assertSupported } from './graph';
 import type { UnsupportedPolicy } from './types';
 
@@ -397,6 +397,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
       }
     }
     const rows = encoded.filter(record => !dropped.has(record.slot));
+    if (rows.length !== picked.length) compactPackedRefs({ saves: rows, details: detailRows }, blobs);
     const legacy = wantLegacy ? readLegacy() : { saves: null, details: null };
     // 空容器不进包：覆盖恢复会拿它把对面的旧式存档清空
     const hasLegacy = legacyHasSave(legacy.saves);

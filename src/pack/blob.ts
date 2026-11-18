@@ -96,10 +96,7 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string> {
 /** 打包块的文件名：所有 data URL 图片按出现顺序拼进这一条 */
 const PACKED_FILE = 'data/images.bin';
 
-interface PackedRange {
-  offset: number;
-  length: number;
-}
+export type PackedRange = [offset: number, length: number];
 
 const EMPTY = new Uint8Array(0);
 
@@ -121,11 +118,31 @@ class PackedStore {
     const sha256 = await sha256Hex(bytes);
     const hit = this.seen.get(sha256);
     if (hit) return hit;
-    const range = { offset: this.bytes, length: bytes.length };
+    const range: PackedRange = [this.bytes, bytes.length];
     this.seen.set(sha256, range);
     this.chunks.push(bytes);
     this.bytes += bytes.length;
     return range;
+  }
+
+  /** 在序列化前回收死亡区间；共享的 range 元组让存活引用同步得到新偏移 */
+  retain(live: ReadonlySet<PackedRange>): void {
+    if (this.merged) throw new Error('打包块已拼接，不能再回收区间');
+    let read = 0;
+    let write = 0;
+    let offset = 0;
+    for (const [hash, range] of this.seen) {
+      const chunk = this.chunks[read++];
+      if (!live.has(range)) {
+        this.seen.delete(hash);
+        continue;
+      }
+      range[0] = offset;
+      this.chunks[write++] = chunk;
+      offset += chunk.length;
+    }
+    this.chunks.length = write;
+    this.bytes = offset;
   }
 
   /** 拼成一条缓冲：只在写包时调用一次，拼完原始分块立刻松手 */
@@ -191,10 +208,16 @@ export class BlobTable {
    * 收一张 data URL 图片：去重后拼进打包块，返回它在文件里的位置。
    * 调用方据此写 `$ab:blob` + `$ab:range`。
    */
-  async addDataUrl(bytes: Uint8Array): Promise<{ file: string; offset: number; length: number }> {
+  async addDataUrl(bytes: Uint8Array): Promise<{ file: string; range: PackedRange }> {
     this.packedStore ??= new PackedStore();
     const range = await this.packedStore.add(bytes);
-    return { file: this.packedStore.file, ...range };
+    return { file: this.packedStore.file, range };
+  }
+
+  /** 被放弃条目的图片不进包；全部放弃时连空文件也不保留 */
+  retainPacked(live: ReadonlySet<PackedRange>): void {
+    this.packedStore?.retain(live);
+    if (this.packedStore?.count === 0) this.packedStore = null;
   }
 
   /** 打包块：没有 data URL 时返回 null */
