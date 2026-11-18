@@ -38,7 +38,8 @@ export interface TakenName {
 }
 
 /**
- * 大小写不敏感地判重：同内容复用已有文件名，不同内容追加 `~<hash8>`。
+ * 大小写不敏感地判重：同内容复用已有文件名，不同内容追加哈希后缀。
+ * 后缀本身也可能已被占用，逐个检查并逐步延长哈希，直至得到唯一名称。
  * `used` 的键是文件名小写形式。
  */
 export function uniqueFileName(
@@ -55,7 +56,15 @@ export function uniqueFileName(
   }
   if (seen.sha256 === sha256) return seen.name;
   const stem = base.replace(/\.(modpack|zip)$/i, '');
-  const suffixed = `${stem}~${shortHash(sha256)}${ext}`;
-  used.set(suffixed.toLowerCase(), { name: suffixed, sha256 });
-  return suffixed;
+  const hash = sha256.toLowerCase().replace(/[^0-9a-f]/g, '').padEnd(8, '0');
+  for (let length = 8; ; length++) {
+    const suffix = hash.slice(0, length).padEnd(length, '0');
+    const candidate = `${stem}~${suffix}${ext}`;
+    const occupied = used.get(candidate.toLowerCase());
+    if (!occupied) {
+      used.set(candidate.toLowerCase(), { name: candidate, sha256 });
+      return candidate;
+    }
+    if (occupied.sha256 === sha256) return occupied.name;
+  }
 }

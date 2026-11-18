@@ -1,4 +1,5 @@
 import { LEGACY_SAVE_ADDR, MOD_HIDDEN_ADDR, MOD_ORDER_ADDR, idbAddr, modAddr, saveAddr } from '../../core/address';
+import { messageError } from '../../core/error';
 import { textByteLength } from '../../core/format';
 import { groupOfKnown, type GroupContext } from '../../core/group';
 import { kindOfAddr, type Item, type ItemFlags } from '../../core/item';
@@ -112,9 +113,13 @@ export function itemsOfDbs(section: IdbSection, ctx: GroupContext): Item[] {
 export function itemsOfMods(bundle: Bundle, ctx: GroupContext): Item[] {
   const selfPattern = selfEntry();
   const items: Item[] = [];
+  const seen = new Set<string>();
   for (const [index, item] of bundle.manifest.mods.items.entries()) {
     if (!bundle.has(item.file)) continue;
     const addr = modAddrOf(item);
+    // 安装阶段按地址找载荷；重复地址会使后续条目错误复用第一份字节
+    if (seen.has(addr)) throw messageError('bundleAddressMismatch');
+    seen.add(addr);
     const flags = originFlags(item, selfPattern);
     items.push({
       addr,
