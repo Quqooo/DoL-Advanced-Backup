@@ -109,27 +109,34 @@ export async function inspectPackage(
 
 export type ImportBundleRequest = Omit<ImportRequest, 'source' | 'bytes'> & { bundle: Bundle };
 
-/** 从已经打开好的包恢复：导出包里内嵌的恢复脚本用这条，省掉重新序列化 zip */
-export async function importBundle(request: ImportBundleRequest): Promise<ImportResult> {
-  // 包内映射只在这次导入里有效：结束后清掉，免得后续分组与导出继续带着它
+let importRunning = false;
+
+/** 包内映射是全局状态：恢复必须互斥，且只有锁持有者能在收尾时清理它 */
+async function exclusiveImport<T>(task: () => Promise<T>): Promise<T> {
+  if (importRunning) throw messageError('importBusy');
+  importRunning = true;
   try {
-    return await runImport(request.bundle, request);
+    return await task();
   } finally {
+    importRunning = false;
     clearPackMapping();
   }
+}
+
+/** 从已经打开好的包恢复：导出包里内嵌的恢复脚本用这条，省掉重新序列化 zip */
+export async function importBundle(request: ImportBundleRequest): Promise<ImportResult> {
+  return exclusiveImport(() => runImport(request.bundle, request));
 }
 
 export async function importPackage(request: ImportRequest): Promise<ImportResult> {
   const source = request.source ?? request.bytes;
   if (!source) throw messageError('importNoSource');
-  request.onProgress?.({ phase: 'open', ratio: BAND.open[0] });
-  const bundle = await openBundle(source);
-  request.onProgress?.({ phase: 'open', ratio: BAND.open[1] });
-  try {
-    return await runImport(bundle, request);
-  } finally {
-    clearPackMapping();
-  }
+  return exclusiveImport(async () => {
+    request.onProgress?.({ phase: 'open', ratio: BAND.open[0] });
+    const bundle = await openBundle(source);
+    request.onProgress?.({ phase: 'open', ratio: BAND.open[1] });
+    return runImport(bundle, request);
+  });
 }
 
 /** 自动快照遇到不支持的类型时先问用户：跳过会留下不完整的回滚点 */

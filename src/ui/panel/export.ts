@@ -218,12 +218,14 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
       const retry = dom('button', 'link-internal macro-button advbk-retry', t().retry);
       retry.type = 'button';
       retry.addEventListener('click', () => {
+        const mine = generation;
         retry.disabled = true;
         void retryCollector(name).then(
           next => {
-            apply(next);
+            if (next !== null && mine === generation) apply(next);
           },
           error => {
+            if (mine !== generation) return;
             retry.disabled = false;
             notices.fail(error);
           },

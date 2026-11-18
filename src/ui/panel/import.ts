@@ -258,7 +258,19 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     syncLocked();
   }
 
-  async function load(next: Uint8Array | Blob, name: string, run = sourceRun.begin()): Promise<void> {
+  function clearSource(): void {
+    source = null;
+    plan = null;
+    renderPlan();
+  }
+
+  function beginSource(): number {
+    const run = sourceRun.begin();
+    clearSource();
+    return run;
+  }
+
+  async function load(next: Uint8Array | Blob, name: string, run = beginSource()): Promise<void> {
     // 迟到的调用（例如快照 payload 读得比后一次选择还慢）不得改任何状态
     if (!sourceRun.current(run)) return;
     source = next;
@@ -336,25 +348,31 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
   async function useSnapshot(id: number, preset?: RestoreMode): Promise<void> {
     // 只是这一次的默认值：从快照点「恢复」时预选干净，用户不必再点一次
     if (preset) setMode(preset, false);
-    // 快照也要换代次：读 payload 可能比用户下一次选择还慢
-    const run = sourceRun.begin();
-    await fillSnapshots();
-    if (!sourceRun.current(run)) return;
-    snapshotSelect.value = String(id);
-    const loaded = await snapshotSource(id);
-    if (!sourceRun.current(run)) return;
-    if (!loaded) {
-      // 选中的快照读不出来：来源与计划一起作废，否则「开始恢复」会执行上一份包
-      sourceRun.begin();
-      source = null;
-      plan = null;
-      snapshotSelect.value = '';
+    // 从选择这一刻起旧计划就不可执行，不能等 payload 读完才作废
+    const run = beginSource();
+    sourceNote.textContent = t().reading;
+    notices.clear();
+    try {
+      await fillSnapshots();
+      if (!sourceRun.current(run)) return;
+      snapshotSelect.value = String(id);
+      const loaded = await snapshotSource(id);
+      if (!sourceRun.current(run)) return;
+      if (!loaded) {
+        clearSource();
+        snapshotSelect.value = '';
+        sourceNote.textContent = t().sourceNone;
+        notices.show('error', t().snapshotMissing);
+        return;
+      }
+      await load(loaded, `#${id}`, run);
+    } catch (error) {
+      // 旧来源的错误只消化，不得清掉用户后来选的新来源
+      if (!sourceRun.current(run)) return;
+      clearSource();
       sourceNote.textContent = t().sourceNone;
-      renderPlan();
-      notices.show('error', t().snapshotMissing);
-      return;
+      notices.fail(error);
     }
-    await load(loaded, `#${id}`, run);
   }
 
   picker.addEventListener('change', () => {
@@ -372,11 +390,8 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     const id = Number(snapshotSelect.value);
     if (!snapshotSelect.value || !Number.isFinite(id)) {
       // 退回占位项也是一次来源变更：作废还在飞的读取
-      sourceRun.begin();
-      source = null;
-      plan = null;
+      beginSource();
       sourceNote.textContent = t().sourceNone;
-      renderPlan();
       return;
     }
     void useSnapshot(id);
@@ -439,10 +454,7 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
         resetScan();
         deps.onImported();
         // 恢复完这份包就不该再留着：同时作废可能还在飞的读取
-        sourceRun.begin();
-        plan = null;
-        source = null;
-        renderPlan();
+        beginSource();
         sourceNote.textContent = t().sourceNone;
         if (result.needsReload) {
           // 模组与图像包的开关只在页面加载时读一次：写完不重载，游戏仍按旧状态跑

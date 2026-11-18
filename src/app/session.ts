@@ -5,9 +5,11 @@ export interface SessionState {
   scan: ScanResult | null;
   /** 真正跑过的采集次数，用于验证「不重复扫描」 */
   scans: number;
+  /** 缓存代次：重扫与作废使进行中的单组重试失去提交资格 */
+  scanGeneration: number;
 }
 
-const state: SessionState = { scan: null, scans: 0 };
+const state: SessionState = { scan: null, scans: 0, scanGeneration: 0 };
 
 export function session(): SessionState {
   return state;
@@ -15,6 +17,7 @@ export function session(): SessionState {
 
 export function resetScan(): void {
   state.scan = null;
+  state.scanGeneration++;
 }
 
 export const SCAN_MAX_AGE_MS = 5 * 60 * 1000;

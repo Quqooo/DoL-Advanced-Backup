@@ -55,6 +55,7 @@ export async function scan(force = false, onBatch?: ScanBatch): Promise<ScanResu
   // 游戏可能用 `idb.init(name)` 换过库名：每次扫描前对一次，store 不必自己碰宿主
   useGameDb(dbName());
   const state = session();
+  if (force) state.scanGeneration++;
   if (!force && state.scan) {
     onBatch?.(state.scan.items);
     return state.scan;
@@ -106,10 +107,12 @@ export async function scan(force = false, onBatch?: ScanBatch): Promise<ScanResu
   return promise;
 }
 
-/** 单组重试：只重跑该采集器，其余条目原样保留 */
-export async function retryCollector(name: string): Promise<ScanResult> {
+/** 单组重试：只重跑该采集器；被重扫或作废取代时返回 null，不提交旧结果 */
+export async function retryCollector(name: string): Promise<ScanResult | null> {
   const state = session();
+  const generation = state.scanGeneration;
   const prev = state.scan ?? (await scan());
+  if (generation !== state.scanGeneration || state.scan !== prev) return null;
   const collector = collectorNamed(name);
   if (!collector) return prev;
 
@@ -140,6 +143,7 @@ export async function retryCollector(name: string): Promise<ScanResult> {
     next.errors[name] = error;
   }
 
+  if (generation !== state.scanGeneration || state.scan !== prev) return null;
   state.scan = next;
   state.scans++;
   return next;

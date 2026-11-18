@@ -672,6 +672,7 @@ const ZH: Strings = {
     // 导出 / 恢复包
     selfPackUnsupported: '包内条目使用了 JSZip 不支持的压缩方式，且未能在模组存储中找到原始字节',
     importNoSource: '没有指定要恢复的包',
+    importBusy: '另一项恢复正在进行，请等它完成后再试',
     importSnapshotFailed: reason => `自动快照失败：${reason}`,
     scanIncomplete: groups => `本机有 ${groups} 组数据未读出，因此无法确定干净恢复的删除范围。请到导出页重试失败的分组，然后再恢复。`,
     dbNameUnknown: '游戏存档库还没就绪，无法确定干净恢复的删除范围。请等游戏进入标题画面后再试，或改用覆盖模式。',
@@ -1071,6 +1072,7 @@ const EN: Strings = {
     // Export / restore pack
     selfPackUnsupported: 'The pack uses a compression method JSZip does not support, and the original bytes were not found in mod storage',
     importNoSource: 'No package was given to restore',
+    importBusy: 'Another restore is already running. Wait for it to finish and try again.',
     importSnapshotFailed: reason => `Automatic snapshot failed: ${reason}`,
     scanIncomplete: groups => `${groups} data groups could not be read, so the deletion scope of a clean restore cannot be determined. Retry the failed groups on the export page, then restore.`,
     dbNameUnknown: 'The game save database is not ready, so the deletion scope of a clean restore cannot be determined. Wait until the title screen appears and try again, or use overwrite mode.',
