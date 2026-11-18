@@ -84,6 +84,19 @@ export function renderPanel(): HTMLElement {
     button.dataset.advbkSubtab = item.key;
     button.setAttribute('role', 'tab');
     button.addEventListener('click', () => select(item.key));
+    button.addEventListener('keydown', event => {
+      const current = panes.findIndex(pane => pane.key === item.key);
+      let next = -1;
+      if (event.key === 'ArrowRight') next = (current + 1) % panes.length;
+      if (event.key === 'ArrowLeft') next = (current - 1 + panes.length) % panes.length;
+      if (event.key === 'Home') next = 0;
+      if (event.key === 'End') next = panes.length - 1;
+      if (next < 0) return;
+      event.preventDefault();
+      const target = panes[next];
+      select(target.key);
+      buttons.get(target.key)?.focus();
+    });
     tabs.appendChild(button);
     buttons.set(item.key, button);
   }

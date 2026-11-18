@@ -186,17 +186,16 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
   syncLocked();
   // 别的分页读包时也会起一轮扫描：跟着锁上，结束后再放出来
   let unwatchScan: (() => void) | null = null;
-  let attached = false;
-  unwatchScan = watchScan(() => {
-    if (el.isConnected) {
-      attached = true;
-    } else if (attached) {
-      // 面板重建后旧实例没有回收入口：它挂载过又被移除，不再跟随刷新
-      unwatchScan?.();
-      unwatchScan = null;
-      return;
-    }
-    syncLocked();
+  // 等调用方同步挂载后再订阅：构造期的首轮通知不能把「尚未挂载」当成「已经移除」
+  queueMicrotask(() => {
+    unwatchScan = watchScan(() => {
+      if (!el.isConnected) {
+        unwatchScan?.();
+        unwatchScan = null;
+        return;
+      }
+      syncLocked();
+    });
   });
 
   /** 软依赖提示跟着勾选变：只讲后果，不改勾选、不拦导出 */
