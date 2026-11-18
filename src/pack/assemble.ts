@@ -68,6 +68,14 @@ export async function packTo(
   const emit = (phase: ProgressPhase, ratio: number, label?: string): void => {
     hooks.onProgress?.({ phase, ratio, ...(label ? { label } : {}) });
   };
+  // 每段字节落盘前后都检查：最后一个条目或中央目录写入期间取消，也不能提交完整文件
+  const output: ByteSink = {
+    async write(chunk) {
+      throwIfAborted(hooks.signal);
+      await sink.write(chunk);
+      throwIfAborted(hooks.signal);
+    },
+  };
 
   emit('collect', 0);
   const blobs = new BlobTable();
@@ -255,7 +263,9 @@ export async function packTo(
         await assertModUnchanged(plan, found.bytes);
         await writer.add({ name: plan.file, data: found.bytes, method: 0 });
       }
+      throwIfAborted(hooks.signal);
       await writer.finish();
+      throwIfAborted(hooks.signal);
       return writer.bytes;
     };
 
@@ -263,7 +273,7 @@ export async function packTo(
     if (wrapped) {
       // 容器头里的块表要先知道内层大小，而 zip 的长度可以在产出字节之前算准
       size = await writeModPackTo(
-        sink,
+        output,
         [
           ...selfFiles(script!, meta.mod),
           {
@@ -277,8 +287,9 @@ export async function packTo(
         RESTORE_MOD_NAME,
       );
     } else {
-      size = await writeZip(sink);
+      size = await writeZip(output);
     }
+    throwIfAborted(hooks.signal);
     emit('assemble', 1);
 
     return {

@@ -181,47 +181,53 @@ async function runImport(bundle: Bundle, request: Omit<ImportRequest, 'source' |
   let snapshotEmpty = false;
   let snapshotTrimFailed: unknown;
 
-  const { report } = await restorePackage({
-    bundle,
-    mode,
-    ...(request.selfPack ? { selfPack: true } : {}),
-    ...(request.selected ? { selected: new Set(request.selected) } : {}),
-    ...(keepSelf ? {} : { keepSelf: false }),
-    scanned,
-    onBeforeWrite: async () => {
-      // 恢复包自己跑恢复时不建回滚点：它是一次性的壳，恢复完就卸载自己，没有界面能用上这份快照；
-      // 包里若带着快照库，随后的写入还会把它冲掉（`skipsDb` 的 selfPack 例外）。
-      if (request.selfPack) return;
-      emit('snapshot', BAND.snapshot[0]);
-      if (!prefs.autoSnapshot) return;
-      try {
-        const snap = await autoSnapshotWithChoice(scanned);
-        // 扫描为空只是没有可备份的内容；恢复照常，界面提示一次
-        if (snap.meta === null) snapshotEmpty = true;
-        if (snap.trimError) snapshotTrimFailed = snap.trimError;
-      } catch (error) {
-        // 留不下回滚点就不动手：四种模式一致。干净恢复会删数据，其它模式也会覆盖本机内容
-        throw messageError('importSnapshotFailed', error instanceof Error ? error : messageOf(error));
-      } finally {
-        emit('snapshot', BAND.snapshot[1]);
-      }
-    },
-    onProgress: progress =>
-      emit(
-        progress.phase,
-        at(progress.phase === 'compare' ? BAND.compare : BAND.apply, progress.ratio),
-        progress.label,
-      ),
-    ...(request.signal ? { signal: request.signal } : {}),
-  });
+  let writing = false;
+  let report: Awaited<ReturnType<typeof restorePackage>>['report'];
+  try {
+    ({ report } = await restorePackage({
+      bundle,
+      mode,
+      ...(request.selfPack ? { selfPack: true } : {}),
+      ...(request.selected ? { selected: new Set(request.selected) } : {}),
+      ...(keepSelf ? {} : { keepSelf: false }),
+      scanned,
+      onBeforeWrite: async () => {
+        // 恢复包自己跑恢复时不建回滚点：它是一次性的壳，恢复完就卸载自己，没有界面能用上这份快照；
+        // 包里若带着快照库，随后的写入还会把它冲掉（`skipsDb` 的 selfPack 例外）。
+        if (request.selfPack) return;
+        emit('snapshot', BAND.snapshot[0]);
+        if (!prefs.autoSnapshot) return;
+        try {
+          const snap = await autoSnapshotWithChoice(scanned);
+          // 扫描为空只是没有可备份的内容；恢复照常，界面提示一次
+          if (snap.meta === null) snapshotEmpty = true;
+          if (snap.trimError) snapshotTrimFailed = snap.trimError;
+        } catch (error) {
+          // 留不下回滚点就不动手：四种模式一致。干净恢复会删数据，其它模式也会覆盖本机内容
+          throw messageError('importSnapshotFailed', error instanceof Error ? error : messageOf(error));
+        } finally {
+          emit('snapshot', BAND.snapshot[1]);
+        }
+      },
+      onProgress: progress => {
+        // applySaves 先写完所有选中槽位，其后任何取消点都可能已经留下部分写入
+        if (progress.phase === 'apply') writing = true;
+        emit(
+          progress.phase,
+          at(progress.phase === 'compare' ? BAND.compare : BAND.apply, progress.ratio),
+          progress.label,
+        );
+      },
+      ...(request.signal ? { signal: request.signal } : {}),
+    }));
+  } finally {
+    // 已进入写入阶段就不能保留旧扫描：失败或取消可能发生在部分写入之后
+    if (writing) resetScan();
+  }
   emit('apply', 1);
 
   const summary = summarize(report);
   const deleted = Object.values(report.deleted).reduce<number>((sum, value) => sum + (value ?? 0), 0);
-  // 本机数据刚被改过：会话里的扫描结果立刻作废。
-  // 面板会在导入后自己重扫，但走公开 API 时没人替它做这件事——下一次导出会拿导入前的
-  // 地址表用于打包，缺失时包内条目会明显减少。
-  resetScan();
   return {
     mode,
     applied: summary.applied,

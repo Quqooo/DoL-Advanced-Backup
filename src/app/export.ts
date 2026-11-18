@@ -1,3 +1,4 @@
+import { throwIfAborted } from '../core/error';
 import { bytesToBase64 } from '../core/format';
 import { entriesOf } from '../core/manifest';
 import { gameVersion } from '../host/env';
@@ -90,6 +91,7 @@ export async function exportPackage(request: ExportRequest = {}): Promise<Export
     // 采集与读脚本都在这里：它可能抛错，此时句柄已经打开，同样要收掉
     const { selected, options, meta, hooks } = await prepare(request, createdAt);
     const result = await packTo(stream, selected, options, meta, hooks);
+    throwIfAborted(request.signal);
     // 收尾只占最后 10%：文件流要等落定，下载链接要把 Blob 交出去
     request.onProgress?.({ phase: 'write', ratio: PACK_SHARE });
     await stream.close(result.name);

@@ -1,3 +1,4 @@
+import { throwIfAborted } from '../core/error';
 import type { Item } from '../core/item';
 import { verifySectionIndex } from './plan/sections';
 import type { RestoreMode } from '../core/types';
@@ -51,6 +52,7 @@ export async function restorePackage(input: RestoreInput): Promise<RestoreOutcom
     progress ? (ratio: number) => progress({ phase: 'compare', ratio: 0.05 + ratio * 0.95 }) : undefined,
   );
   verifySectionIndex(bundle, plan.sections);
+  throwIfAborted(input.signal);
   await input.onBeforeWrite?.(plan);
   const selected = input.selected ?? plan.available;
   const report = await applyPlan({
