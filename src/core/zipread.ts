@@ -174,7 +174,7 @@ export type EntryDecoder = (data: Uint8Array, method: ZipMethod) => Promise<Uint
 
 /**
  * 只取一个条目：读中央目录定位到本地头，避免为了一个文件解整包。
- * 不给 `decode` 时只认 STORE 与 deflate（原生 `DecompressionStream`）。
+ * 不给 `decode` 时只认 STORE 与 deflate；原生不可用时由 `tryInflateRaw` 退回 fflate。
  */
 export async function readZipEntry(
   bytes: Uint8Array,

@@ -9,13 +9,19 @@ import { inflateSync } from 'fflate';
 
 /** 解不出来就返回 null：调用方按「这个条目读不了」处理 */
 export async function tryInflateRaw(data: Uint8Array): Promise<Uint8Array | null> {
-  if (typeof DecompressionStream !== 'function') return null;
+  if (typeof DecompressionStream === 'function') {
+    try {
+      // Blob 只收 ArrayBuffer 视图；SharedArrayBuffer 视图要先复制，普通视图由 Blob 自己拷
+      const shared = typeof SharedArrayBuffer === 'function' && data.buffer instanceof SharedArrayBuffer;
+      const view = (shared ? new Uint8Array(data) : data) as Uint8Array<ArrayBuffer>;
+      const stream = new Blob([view]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      return new Uint8Array(await new Response(stream).arrayBuffer());
+    } catch {
+      // 原生实现不可用时走同一套纯 JS 降级
+    }
+  }
   try {
-    // Blob 只收 ArrayBuffer 视图；SharedArrayBuffer 视图要先复制，普通视图由 Blob 自己拷
-    const shared = typeof SharedArrayBuffer === 'function' && data.buffer instanceof SharedArrayBuffer;
-    const view = (shared ? new Uint8Array(data) : data) as Uint8Array<ArrayBuffer>;
-    const stream = new Blob([view]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    return new Uint8Array(await new Response(stream).arrayBuffer());
+    return inflateSync(data);
   } catch {
     return null;
   }
