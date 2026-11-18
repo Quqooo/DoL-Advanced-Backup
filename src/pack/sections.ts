@@ -348,8 +348,9 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
     const addr = ssAddr(entry.key);
     if (selected.has(addr)) keys.push({ a: addr, v: entry.value });
   }
+  const packedKeys = new Set(keys.map(item => item.a));
   for (const addr of selected) {
-    if (/^(ls|ss):/.test(addr) && !keys.some(item => item.a === addr)) throw messageError('packSelectionMissing', addr);
+    if (/^(ls|ss):/.test(addr) && !packedKeys.has(addr)) throw messageError('packSelectionMissing', addr);
   }
   if (keys.length > 0) {
     announce('keys.json');

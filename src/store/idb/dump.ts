@@ -1,6 +1,19 @@
 import { abortQuietly, close, ensureDb, openDb, request, type DbKey, type IndexSpec, type StoreSpec } from './index';
 import { messageError } from '../../core/error';
 
+const hasOwn = Object.prototype.hasOwnProperty;
+
+/** 索引键的长度；不为每个元素创建一次字符串 */
+function indexDigits(index: number): number {
+  if (index < 10) return 1;
+  if (index < 100) return 2;
+  if (index < 1_000) return 3;
+  if (index < 10_000) return 4;
+  if (index < 100_000) return 5;
+  if (index < 1_000_000) return 6;
+  return String(index).length;
+}
+
 export interface DbStoreMeasure {
   name: string;
   count: number;
@@ -290,7 +303,24 @@ export function valueSize(value: unknown, seen: WeakSet<object> = new WeakSet(),
 
   let total = 2;
   if (Array.isArray(object)) {
-    for (const item of object) total += valueSize(item, seen, depth + 1) + 1;
+    // 百万以内按索引走：密集数组与数组迭代器同量级，空洞也只是跳过。
+    // 更长的数组改走键枚举，避免稀疏数组按 length 扫过大量空洞。
+    if (object.length <= 1_000_000) {
+      const list = object as unknown[];
+      let index = 0;
+      // 数组迭代器在密集数组上是原生循环；自己认索引只为排除继承项与空洞
+      for (const item of list) {
+        if (hasOwn.call(list, index)) {
+          total += indexDigits(index) + valueSize(item, seen, depth + 1) + 3;
+        }
+        index++;
+      }
+    } else {
+      for (const key in object) {
+        if (!hasOwn.call(object, key)) continue;
+        total += key.length + valueSize((object as unknown as Record<string, unknown>)[key], seen, depth + 1) + 3;
+      }
+    }
   } else if (object instanceof Map) {
     for (const [key, item] of object) total += valueSize(key, seen, depth + 1) + valueSize(item, seen, depth + 1);
   } else if (object instanceof Set) {
@@ -298,7 +328,7 @@ export function valueSize(value: unknown, seen: WeakSet<object> = new WeakSet(),
   } else {
     // 用 for…in 而不是 Object.entries：整库里有几十万键，逐个创建数组会多花几百毫秒
     for (const key in object as Record<string, unknown>) {
-      if (!Object.prototype.hasOwnProperty.call(object, key)) continue;
+      if (!hasOwn.call(object, key)) continue;
       total += key.length + valueSize((object as Record<string, unknown>)[key], seen, depth + 1) + 3;
     }
   }
