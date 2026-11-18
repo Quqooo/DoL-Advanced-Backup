@@ -21,6 +21,8 @@ export interface StoredPack {
   /** ModLoader 里的存储键（文件名） */
   name: string;
   bytes: Uint8Array;
+  /** 同一个存储键可以在两层各放一份不同内容，删除必须按层分派 */
+  layer: 'idb' | 'local';
 }
 
 function asBytes(value: string | Uint8Array): Uint8Array | null {
@@ -59,28 +61,37 @@ export function isRestorePack(bytes: Uint8Array): boolean {
  */
 export async function findStoredPacks(only?: readonly string[]): Promise<StoredPack[]> {
   const out: StoredPack[] = [];
-  const take = (name: string, value: string | Uint8Array): void => {
+  const take = (name: string, value: string | Uint8Array, layer: StoredPack['layer']): void => {
     const bytes = asBytes(value);
     if (!bytes || !isRestorePack(bytes)) return;
-    out.push({ name, bytes });
+    out.push({ name, bytes, layer });
   };
 
   if (only) {
     const entries = await readModEntries(only);
     for (const [name, entry] of entries) {
-      const value = entry.idb ?? entry.local;
-      if (value !== undefined) take(name, value);
+      if (entry.idb !== undefined) take(name, entry.idb, 'idb');
+      if (entry.local !== undefined) take(name, entry.local, 'local');
     }
     return out;
   }
 
   const [idb, local] = await Promise.all([readIdbMods(), readLocalMods()]);
-  for (const [name, value] of idb.values) take(name, value);
-  for (const [name, value] of local.values) take(name, value);
+  for (const [name, value] of idb.values) take(name, value, 'idb');
+  for (const [name, value] of local.values) take(name, value, 'local');
   return out;
 }
 
-/** 从 ModLoader 移除；写后必须刷新页面才生效，调用方决定什么时候重载 */
+/** 只删严格匹配的同内容副本；同名另一层可能装着不同的包，不能跨层删除 */
+export async function removeStoredPackCopies(packs: readonly StoredPack[]): Promise<boolean> {
+  let done = false;
+  for (const pack of packs) {
+    done = (pack.layer === 'idb' ? await removeMod(pack.name) : await removeModLocal(pack.name)) || done;
+  }
+  return done;
+}
+
+/** 正本接管时移除本轮发现的全部恢复包；写后必须刷新页面才生效 */
 export async function removeStoredPacks(packs: readonly StoredPack[]): Promise<boolean> {
   let done = false;
   for (const pack of packs) {

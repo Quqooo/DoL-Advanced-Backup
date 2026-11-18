@@ -2,7 +2,7 @@ import type { RestoreMode } from '../core/types';
 import { messageError } from '../core/error';
 import type { Progress } from '../core/progress';
 import { isRestorePack, selfMod, type SelfMod } from '../host/self';
-import { isModPack } from '../core/modpack';
+import { isModPack, listModPackEntries, readModPackEntry } from '../core/modpack';
 import { entriesOf } from '../core/manifest';
 import { bytesSource, openZip } from '../core/zipread';
 import { decodeEntry } from '../pack/codec';
@@ -10,7 +10,7 @@ import { sha256Hex } from '../pack/blob';
 import { openBundle, type Bundle } from '../restore/bundle';
 import { bundleOfZip, isZipBundleUnreadable } from '../restore/zipbundle';
 import { importBundle, type ImportResult } from './import';
-import { findStoredPacks, removeStoredPacks, type StoredPack } from './packStore';
+import { findStoredPacks, removeStoredPackCopies, type StoredPack } from './packStore';
 
 /**
  * 「可恢复包」：导出时把同一份 JS 内嵌进包里，用户把它当模组装进 ModLoader 就能恢复，
@@ -35,37 +35,66 @@ export interface RestorePack {
  * 回退必须验证每个条目的内容哈希且只匹配唯一来源；读不出身份就拒绝。
  * 不以文件名、大小或 CRC 相同作为强身份依据。
  */
+type PackIdentity = ReadonlyMap<string, string>;
+
+async function identityOf(mod: SelfMod): Promise<PackIdentity> {
+  const hashes = new Map<string, string>();
+  for (const [name, entry] of Object.entries(mod.zip.files)) {
+    if (!entry.dir) hashes.set(name, await sha256Hex(await entry.async('uint8array')));
+  }
+  return hashes;
+}
+
+async function sameStoredPack(identity: PackIdentity, bytes: Uint8Array): Promise<boolean> {
+  try {
+    if (isModPack(bytes)) {
+      const names = listModPackEntries(bytes);
+      if (names.length !== identity.size || new Set(names).size !== identity.size) return false;
+      for (const name of names) {
+        const data = readModPackEntry(bytes, name);
+        if (!data || await sha256Hex(data) !== identity.get(name)) return false;
+      }
+      return true;
+    }
+    const zip = await openZip(bytesSource(bytes));
+    const entries = zip.entries.filter(entry => !entry.name.endsWith('/'));
+    if (entries.length !== identity.size || new Set(entries.map(entry => entry.name)).size !== identity.size) return false;
+    for (const entry of entries) {
+      const data = await zip.read(entry.name, decodeEntry);
+      if (!data || await sha256Hex(data) !== identity.get(entry.name)) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function matchingStoredPacks(mod: SelfMod, packs: readonly StoredPack[]): Promise<StoredPack[]> {
+  try {
+    const identity = await identityOf(mod);
+    const matches: StoredPack[] = [];
+    for (const pack of packs) if (await sameStoredPack(identity, pack.bytes)) matches.push(pack);
+    return matches;
+  } catch {
+    return [];
+  }
+}
+
 async function bundleFromStorage(mod: SelfMod): Promise<Bundle | null> {
-  const mine = Object.keys(mod.zip.files).filter(name => !mod.zip.files[name].dir);
   let packs: StoredPack[] = [];
   try {
     packs = await findStoredPacks();
   } catch {
     return null;
   }
-  // 必须逐条读取当前句柄并核对内容哈希；读不出就无法证明来源，不以文件名猜测。
-  const hashes = new Map<string, string>();
-  try {
-    for (const name of mine) hashes.set(name, await sha256Hex(await mod.zip.files[name].async('uint8array')));
-  } catch {
-    return null;
-  }
+  // 容器正常走内层字节入口；这里没有可验证的外层读路径就拒绝回退。
+  const candidates = await matchingStoredPacks(mod, packs.filter(pack => !isModPack(pack.bytes)));
   const matches: Bundle[] = [];
-  for (const pack of packs) {
-    // 容器正常走内层字节入口；这里没有可验证的外层读路径就拒绝回退。
-    if (isModPack(pack.bytes)) continue;
+  for (const pack of candidates) {
     try {
-      const zip = await openZip(bytesSource(pack.bytes));
-      const entries = zip.entries.filter(entry => !entry.name.endsWith('/'));
-      if (entries.length !== mine.length || new Set(entries.map(entry => entry.name)).size !== mine.length) continue;
-      let equal = true;
-      for (const entry of entries) {
-        const data = await zip.read(entry.name, decodeEntry);
-        if (!data || !hashes.has(entry.name) || await sha256Hex(data) !== hashes.get(entry.name)) { equal = false; break; }
-      }
-      if (equal) matches.push(await openBundle(pack.bytes));
+      matches.push(await openBundle(pack.bytes));
     } catch {
-      continue;
+      // 匹配项无法作为恢复来源时继续检查其余候选，不按文件名选一个
     }
   }
   return matches.length === 1 ? matches[0] : null;
@@ -117,6 +146,7 @@ export function applyRestorePack(
  * 卸载自己。ModLoader 的缓存条目只带 boot.json 的 name、不带存储键，只能回存储层按内容认；
  * 写后必须刷新页面才生效，调用方负责重载。
  */
-export async function dropRestorePack(): Promise<boolean> {
-  return removeStoredPacks(await findStoredPacks());
+export async function dropRestorePack(pack: RestorePack): Promise<boolean> {
+  const matches = await matchingStoredPacks(pack.mod, await findStoredPacks());
+  return removeStoredPackCopies(matches);
 }

@@ -157,7 +157,7 @@ function openDialog(pack: RestorePack): void {
         fail(failureLines(result.failures, result.failures.length, strings).join(' · ') || `${result.failed}`);
         return;
       }
-      await dropRestorePack();
+      await dropRestorePack(pack);
       const notes: string[] = [];
       if (result.snapshotEmpty) notes.push(strings.autoSnapshotEmpty);
       if (result.snapshotTrimFailed) {
@@ -180,7 +180,7 @@ function openDialog(pack: RestorePack): void {
 
   const cancel = async (): Promise<void> => {
     lock(true);
-    await dropRestorePack();
+    await dropRestorePack(pack);
     status.textContent = strings.restorePackDropped;
     overlay.remove();
   };
