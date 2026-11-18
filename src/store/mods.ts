@@ -1,6 +1,7 @@
 import { bytesToBase64 } from '../core/format';
 import { messageError } from '../core/error';
 import { stringifyJson } from '../core/json';
+import type { DeleteResult } from '../core/types';
 import { close, deleteByKeys, ensureDb, getAllWithKeys, openDb, putRecords, request } from './idb';
 import { readKey, readLocal, removeKeys } from './local';
 import { localModKeys, modKeys, type ModKeys } from './modkeys';
@@ -324,15 +325,13 @@ export async function hasModValue(name: string): Promise<boolean> {
   try {
     const store = db.transaction(keys.store, 'readonly').objectStore(keys.store);
     return (await request(store.get(`${keys.prefix}${name}`))) !== undefined;
-  } catch {
-    return false;
   } finally {
     close(db);
   }
 }
 
-/** 两侧一起删：只删一层会留下同名副本，重载后又冒出来。返回删之前值在不在，镜像的计数按实际的来 */
-export async function deleteModValue(name: string): Promise<boolean> {
+/** 两侧一起删：只删一层会留下同名副本；删除失败与原本不存在分开返回 */
+export async function deleteModValue(name: string): Promise<DeleteResult> {
   const keys = modKeys();
   const key = `${keys.prefix}${name}`;
   let existed = readKey(`${keys.localPrefix}${name}`) !== null;
@@ -346,9 +345,11 @@ export async function deleteModValue(name: string): Promise<boolean> {
       close(db);
     }
   }
-  // 按删除后的实际状态计数：`removeKeys` 可能删不掉，别把失败报成已删除
   const failed = removeKeys([`${keys.localPrefix}${name}`]);
-  return existed && failed.length === 0 && readKey(`${keys.localPrefix}${name}`) === null;
+  if (failed.length > 0 || readKey(`${keys.localPrefix}${name}`) !== null) {
+    return { status: 'failed', error: messageError('deleteFailed') };
+  }
+  return existed ? { status: 'deleted' } : { status: 'absent' };
 }
 
 /** 列表键原样写入；值为 null 表示删掉这个键 */

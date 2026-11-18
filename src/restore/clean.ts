@@ -1,6 +1,6 @@
 import { nameOfAddr, schemeOf } from '../core/address';
 import { categoryOfGroup, type Item } from '../core/item';
-import type { Category } from '../core/types';
+import type { Category, DeleteResult } from '../core/types';
 import { removeAddr } from '../store/address';
 import { addPendingDrop, isProtectedDb } from '../store/pending-drop';
 import { uninstallMod } from './mods';
@@ -34,7 +34,7 @@ export interface MirrorOutcome {
   skipped: Category[];
 }
 
-async function removeItem(item: Item): Promise<boolean> {
+async function removeItem(item: Item): Promise<DeleteResult> {
   // 模组是卸载，不是删键：两层副本都要走同一条路
   return item.kind === 'mod' ? uninstallMod(item.addr) : removeAddr(item.addr);
 }
@@ -77,7 +77,9 @@ export async function mirrorPlan(input: MirrorInput): Promise<MirrorOutcome> {
         if (name !== null) pending.push(name);
       }
       try {
-        if (await removeItem(item)) removed++;
+        const result = await removeItem(item);
+        if (result.status === 'deleted') removed++;
+        else if (result.status === 'failed') out.failures.push({ category, item: item.addr, error: result.error });
       } catch (error) {
         out.failures.push({ category, item: item.addr, error });
       }

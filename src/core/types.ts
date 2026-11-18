@@ -4,6 +4,12 @@ export type Preset = 'full' | 'standard' | 'mods' | 'custom';
 
 export type RestoreMode = 'merge' | 'missing' | 'overwrite' | 'clean';
 
+/** 删除结果必须区分未命中与失败，镜像报告不能把两者都当成 false。 */
+export type DeleteResult =
+  | { status: 'deleted' }
+  | { status: 'absent' }
+  | { status: 'failed'; error: unknown };
+
 /** 界面语言偏好：`auto` 跟随页面文本判定，其余强制 */
 export type LangPref = 'auto' | 'zh' | 'en';
 

@@ -1,5 +1,6 @@
 import { MOD_HIDDEN_ADDR, MOD_ORDER_ADDR, nameOfAddr } from '../core/address';
 import { messageError } from '../core/error';
+import type { DeleteResult } from '../core/types';
 import { matches, selfEntry } from '../core/mapping';
 import { isNewer } from '../core/version';
 import { loaderVersion } from '../host/env';
@@ -50,18 +51,22 @@ export function keepInstalled(list: readonly string[], present: ReadonlySet<stri
 }
 
 /** 两层一起删除：只删一层会留下同名副本，重载后重新出现 */
-export async function uninstallMod(addr: string): Promise<boolean> {
+export async function uninstallMod(addr: string): Promise<DeleteResult> {
   const stored = nameOfAddr(addr);
-  if (stored === null) return false;
-  // 控制器的返回值只说明「这次调用没抛错」，不代表真有东西可删；计数要看存储里的实际状态
-  const existed = await hasModValue(stored);
-  if (hasApi('removeModIndexDB')) {
-    await removeMod(stored);
-    await removeModLocal(stored);
-    // 控制器的返回值只说明「调用没抛错」；是否真删掉要看存储
-    return existed && !(await hasModValue(stored));
+  if (stored === null) return { status: 'failed', error: messageError('addrInvalid', addr) };
+  try {
+    // 控制器的返回值只说明「这次调用没抛错」，不代表真有东西可删；计数要看存储里的实际状态
+    const existed = await hasModValue(stored);
+    if (hasApi('removeModIndexDB')) {
+      await removeMod(stored);
+      await removeModLocal(stored);
+      if (await hasModValue(stored)) return { status: 'failed', error: messageError('deleteFailed') };
+      return existed ? { status: 'deleted' } : { status: 'absent' };
+    }
+    return await deleteModValue(stored);
+  } catch (error) {
+    return { status: 'failed', error };
   }
-  return deleteModValue(stored);
 }
 
 /**

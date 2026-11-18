@@ -12,6 +12,7 @@ import {
   ssAddr,
 } from '../core/address';
 import { keyBytes } from '../core/format';
+import type { DeleteResult } from '../core/types';
 import { legacyHasSave } from '../core/legacy';
 import { clearDatabase, databases } from './idb';
 import { writeDatabase, type DbDump } from './idb/dump';
@@ -120,38 +121,48 @@ export async function writeAddr(
   }
 }
 
-/** 删掉一条地址；返回 false 表示本来就没有 */
-export async function removeAddr(addr: string): Promise<boolean> {
-  const parsed = parseAddr(addr);
-  if (!parsed) return false;
+/** 删除一条地址；失败与原本不存在分开报告，调用方不必猜测布尔值的含义。 */
+export async function removeAddr(addr: string): Promise<DeleteResult> {
+  try {
+    const parsed = parseAddr(addr);
+    if (!parsed) return { status: 'failed', error: messageError('addrInvalid', addr) };
 
-  switch (parsed.scheme) {
-    case 'ls':
-    case 'ss': {
-      const kind = parsed.scheme === 'ss' ? 'session' : 'local';
-      if (readKey(parsed.name, kind) === null) return false;
-      return removeKeys([parsed.name], kind).length === 0;
-    }
-    case 'ck':
-      // 旧包里的 Cookie 条目不恢复，也不从本机删除
-      return false;
-    case 'idb':
-      // 清空各仓而不是删除库：见 `clearDatabase`
-      return (await clearDatabase(parsed.name)) > 0;
-    case 'save': {
-      if (parsed.engine === 'legacy') {
-        const legacy = readLegacy();
-        if (legacy.saves === null && legacy.details === null) return false;
-        return removeKeys([LEGACY_SAVES_KEY, LEGACY_DETAILS_KEY]).length === 0;
+    switch (parsed.scheme) {
+      case 'ls':
+      case 'ss': {
+        const kind = parsed.scheme === 'ss' ? 'session' : 'local';
+        if (readKey(parsed.name, kind) === null) return { status: 'absent' };
+        if (removeKeys([parsed.name], kind).length > 0) {
+          return { status: 'failed', error: messageError('deleteFailed') };
+        }
+        return { status: 'deleted' };
       }
-      // 读与删同一个事务：两步之间写进来的存档不会被误判
-      return await deleteSaveSlot(parsed.slot);
+      case 'ck':
+        // 旧包里的 Cookie 条目不恢复，也不从本机删除
+        return { status: 'absent' };
+      case 'idb':
+        // 清空各仓而不是删除库：见 `clearDatabase`
+        return (await clearDatabase(parsed.name)) > 0 ? { status: 'deleted' } : { status: 'absent' };
+      case 'save': {
+        if (parsed.engine === 'legacy') {
+          const legacy = readLegacy();
+          if (legacy.saves === null && legacy.details === null) return { status: 'absent' };
+          if (removeKeys([LEGACY_SAVES_KEY, LEGACY_DETAILS_KEY]).length > 0) {
+            return { status: 'failed', error: messageError('deleteFailed') };
+          }
+          return { status: 'deleted' };
+        }
+        // 读与删同一个事务：两步之间写进来的存档不会被误判
+        return (await deleteSaveSlot(parsed.slot)) ? { status: 'deleted' } : { status: 'absent' };
+      }
+      case 'mod':
+        return deleteModValue(parsed.name);
+      case 'modlist':
+        await writeModList(parsed.list, null);
+        return { status: 'deleted' };
     }
-    case 'mod':
-      return deleteModValue(parsed.name);
-    case 'modlist':
-      await writeModList(parsed.list, null);
-      return true;
+  } catch (error) {
+    return { status: 'failed', error };
   }
 }
 
