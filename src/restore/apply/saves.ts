@@ -87,7 +87,7 @@ export async function applyLegacy(state: ApplyState): Promise<void> {
   }
   // 两个键一次写完：`writeLegacy` 内部按需写两个键，在循环里重复调用没有效果
   try {
-    writeLegacy(legacy);
+    writeLegacy(legacy, { removeMissingDetails: true });
     for (const item of items) bump(state.report, item, 'applied');
   } catch (error) {
     fail(state.report, 'saves', items[0].addr, error);

@@ -136,14 +136,17 @@ function saveTransaction(
 }
 
 /** 两键写失败尽力补偿；localStorage 不提供崩溃原子性。 */
-export function writeLegacy(legacy: { saves: string | null; details: string | null }): void {
+export function writeLegacy(
+  legacy: { saves: string | null; details: string | null },
+  options: { removeMissingDetails?: boolean } = {},
+): void {
   const area = window.localStorage;
   const previous = [area.getItem(LEGACY_SAVES_KEY), area.getItem(LEGACY_DETAILS_KEY)];
   try {
     if (legacy.saves !== null) area.setItem(LEGACY_SAVES_KEY, legacy.saves);
     if (legacy.details !== null) area.setItem(LEGACY_DETAILS_KEY, legacy.details);
-    // 换了存档却没带 details：旧标题/时间对不上新存档，留着比删掉更容易误导
-    else if (legacy.saves !== null) area.removeItem(LEGACY_DETAILS_KEY);
+    // 覆盖时缺 details 要删除；补缺传 null 只表示这一边无需修改
+    else if (legacy.saves !== null && options.removeMissingDetails === true) area.removeItem(LEGACY_DETAILS_KEY);
   } catch {
     let restored = true;
     [LEGACY_SAVES_KEY, LEGACY_DETAILS_KEY].forEach((key, index) => {

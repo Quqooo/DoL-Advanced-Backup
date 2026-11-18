@@ -105,7 +105,7 @@ export async function writeAddr(
     }
     case 'legacy': {
       if (!(parsed.scheme === 'save' && parsed.engine === 'legacy')) throw messageError('addrMismatch', addr);
-      writeLegacy({ saves: payload.saves, details: payload.details });
+      writeLegacy({ saves: payload.saves, details: payload.details }, { removeMissingDetails: true });
       return { count: 1 };
     }
     case 'mod': {
