@@ -10,9 +10,9 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "esbuild": "^0.25.9",
+    "esbuild": "^0.28.2",
     "fflate": "^0.8.2",
-    "typescript": "^5.9.2"
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "@bokuweb/zstd-wasm": "^0.0.27",
