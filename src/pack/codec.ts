@@ -126,8 +126,27 @@ export async function encodeEntry(
   return { data: await deflateRaw(bytes, onProgress), method: 8 };
 }
 
+/** 分块送入压缩流：打包块本来就是逐张图片的字节，不必先拼成一条等长缓冲 */
+export async function encodeChunks(
+  chunks: readonly Uint8Array[],
+  options: { compression: Compression },
+  onProgress?: (fed: number) => void,
+): Promise<EncodedStream> {
+  return encodeStream(async sink => {
+    for (const chunk of chunks) await sink.write(chunk);
+  }, options, onProgress);
+}
+
 export interface EncodedStream {
-  data: Uint8Array;
+  /**
+   * 压缩结果的分块，顺序即条目内容。
+   *
+   * 压缩流按消费者节奏吐块：本来就由小块组成的输入（打包图片）可以按块交给写端，
+   * 不必拼成一条与结果等长的缓冲；需要单块的调用方自行合并。
+   */
+  parts: Uint8Array[];
+  /** 压缩后字节数（各部分之和） */
+  comp: number;
   method: ZipMethod;
   /** 未压缩字节数 */
   size: number;
@@ -157,6 +176,13 @@ export async function encodeStream(
     chunks.push(chunk);
     total += chunk.length;
   };
+  const encoded = (parts: Uint8Array[], method: ZipMethod): EncodedStream => ({
+    parts,
+    comp: parts.reduce((sum, part) => sum + part.length, 0),
+    method,
+    size: fed,
+    crc: crc.digest(),
+  });
   const count = (chunk: Uint8Array): void => {
     crc.update(chunk);
     fed += chunk.length;
@@ -165,14 +191,14 @@ export async function encodeStream(
 
   if (options.compression === 'none') {
     await produce({ write(chunk) { count(chunk); collect(chunk); } });
-    return { data: concatChunks(chunks, total), method: 0, size: fed, crc: crc.digest() };
+    return encoded(chunks, 0);
   }
 
   if (options.compression === 'zstd') {
     // zstd 的 wasm 接口是一次调用：先收满整段再压，中途没有可读的进度
     await produce({ write(chunk) { count(chunk); collect(chunk); } });
     const data = await zstdCompress(concatChunks(chunks, total));
-    return { data, method: 93, size: fed, crc: crc.digest() };
+    return encoded([data], 93);
   }
 
   if (typeof CompressionStream === 'function') {
@@ -201,10 +227,10 @@ export async function encodeStream(
       throw error;
     }
     await drained;
-    return { data: concatChunks(chunks, total), method: 8, size: fed, crc: crc.digest() };
+    return encoded(chunks, 8);
   }
 
   // 没有 CompressionStream 的旧 WebView：只能先累积整段再压
   await produce({ write(chunk) { count(chunk); collect(chunk); } });
-  return { data: deflateSync(concatChunks(chunks, total), { level: 6 }), method: 8, size: fed, crc: crc.digest() };
+  return encoded([deflateSync(concatChunks(chunks, total), { level: 6 })], 8);
 }

@@ -61,6 +61,11 @@ export interface ManifestMods {
 }
 
 export interface ManifestBlob {
+  /**
+   * 内容标识。普通数据块是文件内容的 SHA-256；打包块（`data/images.bin`）是按顺序拼接
+   * 各块 SHA-256 后再取一次 SHA-256——真算整段哈希要先有一条与整块等长的缓冲。
+   * 恢复侧只用 `bytes` 与 zip CRC 校验，这个值不参与校验。
+   */
   sha256: string;
   file: string;
   bytes: number;

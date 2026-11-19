@@ -10,17 +10,18 @@ import { createManifest, type ManifestSection } from '../core/manifest';
 import { injectedModName } from '../core/naming';
 import { writeModPackTo } from '../core/modpack';
 import type { ProgressPhase } from '../core/progress';
-import type { ByteSink } from '../core/sink';
+import { concatChunks, type ByteSink } from '../core/sink';
 import { injectedValues } from '../host/modloader';
 import { openModReader } from '../store/mods';
-import { BlobTable, sha256Hex } from './blob';
-import { encodeEntry, encodeStream } from './codec';
+import { BlobTable } from './blob';
+import { encodeChunks, encodeEntry, encodeStream } from './codec';
 import { planMods, assertModUnchanged, readMod, type ModPlan } from './mods';
 import { readmeText } from './readme';
 import { buildSections } from './sections';
 import { selfFiles } from './selfboot';
 import type { PackHooks, PackMeta, PackOptions, PackOutcome, PendingItem } from './types';
-import { crc32, zipPlanSize, ZipWriter, type ZipEntry } from './zip';
+import { crc32, payloadLength, zipPlanSize, ZipWriter, type ZipEntry } from './zip';
+
 
 /**
  * 包名与 manifest 的时间戳同源。
@@ -92,7 +93,8 @@ export async function packTo(
       const encoded = await encodeStream(task.write, { compression: options.compression });
       sectionEntries.push({
         name: task.file,
-        data: encoded.data,
+        // 分区结果合并成一条：逐块保留不降峰值，散块反而更容易留下碎片
+        data: encoded.parts.length === 1 ? encoded.parts[0] : concatChunks(encoded.parts, encoded.comp),
         method: encoded.method,
         size: encoded.size,
         crc: encoded.crc,
@@ -112,7 +114,7 @@ export async function packTo(
   emit('collect', COLLECT_END);
 
   // data URL 图片拼成一条打包块：写包时压一次，引用靠偏移定位
-  const packed = blobs.packed();
+  const packed = await blobs.packed();
 
   // 引用闭合：JSON 里出现的每个 blob 都得在表里，表里没人引用的不进包
   const known = new Set(blobs.list().map(item => item.blob.file));
@@ -167,7 +169,7 @@ export async function packTo(
     manifest.blobs = blobs.list().map(item => item.blob);
     if (packed) {
       // 打包块也要进清单：恢复时按它把整段字节读回来，再按偏移切片
-      manifest.blobs.push({ sha256: await sha256Hex(packed.bytes), file: packed.file, bytes: packed.bytes.length });
+      manifest.blobs.push({ sha256: packed.digest, file: packed.file, bytes: packed.bytes });
     }
 
     const encoder = new TextEncoder();
@@ -194,13 +196,9 @@ export async function packTo(
     for (const item of blobs.list()) {
       tail.push({ name: item.blob.file, bytes: item.bytes, deflate: true });
     }
-    // 打包块本身是图片二进制，魔数嗅探会判成「已压缩」而存原样；它恰恰最该压（37.6 → 18.8 MB）
-    if (packed) {
-      tail.push({ name: packed.file, bytes: packed.bytes, deflate: true, skipCompressed: false });
-    }
 
     // 按字节加权：整库那一条有 150 MB，按条目数算它只占 1/170，进度条会在它身上冻住三秒
-    const totalBytes = [...head, ...tail].reduce((sum, item) => sum + item.bytes.length, 0);
+    const totalBytes = [...head, ...tail].reduce((sum, item) => sum + item.bytes.length, 0) + (packed?.bytes ?? 0);
     const encodeRatio = (bytes: number): number =>
       PLAN_END + (ENCODE_END - PLAN_END) * (totalBytes > 0 ? Math.min(bytes, totalBytes) / totalBytes : 1);
     let doneBytes = 0;
@@ -216,14 +214,15 @@ export async function packTo(
             fed => emit('encode', encodeRatio(doneBytes + fed), item.name),
           )
         : { data: item.bytes, method: 0 as const };
+      const bytes = item.bytes.length;
       entries.push({
         name: item.name,
         data: encoded.data,
         method: encoded.method,
-        size: item.bytes.length,
+        size: bytes,
         crc: crc32(item.bytes),
       });
-      doneBytes += item.bytes.length;
+      doneBytes += bytes;
       emit('encode', encodeRatio(doneBytes));
     };
 
@@ -232,6 +231,20 @@ export async function packTo(
     // 分区在采集阶段已经压好，按包内顺序插在头部条目之后
     entries.push(...sectionEntries);
     for (const item of tail) await encodeInto(item);
+    if (packed) {
+      // 打包块分块直接进压缩流：不拼整段，也不做「已压缩」嗅探（它恰恰最该压）
+      emit('encode', encodeRatio(doneBytes), packed.file);
+      const encoded = await encodeChunks(packed.parts, { compression: options.compression });
+      entries.push({
+        name: packed.file,
+        data: encoded.parts,
+        method: encoded.method,
+        size: encoded.size,
+        crc: encoded.crc,
+      });
+      doneBytes += encoded.size;
+      emit('encode', encodeRatio(doneBytes));
+    }
 
     emit('assemble', ENCODE_END);
     // 与 manifest.createdAt 同源：导出侧提前算过同一个名字，两边不能各取一次当前时间；
@@ -244,7 +257,7 @@ export async function packTo(
     // 装配段按写入字节推进：写文件是 I/O，整段只报首尾会让进度条在 90% 上冻住。
     // 分母含模组——长度第一趟就算出来了，字节要等写的时候才读。
     const total = zipPlanSize([
-      ...entries.map(entry => ({ name: entry.name, comp: entry.data.length })),
+      ...entries.map(entry => ({ name: entry.name, comp: payloadLength(entry.data) })),
       ...planned.plans.map((plan: ModPlan) => ({ name: plan.file, comp: plan.bytes })),
     ]);
     const report = (written: number): void =>

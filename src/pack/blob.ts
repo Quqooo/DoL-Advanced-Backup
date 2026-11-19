@@ -98,8 +98,6 @@ const PACKED_FILE = 'data/images.bin';
 
 export type PackedRange = [offset: number, length: number];
 
-const EMPTY = new Uint8Array(0);
-
 /**
  * 打包在一起的数据块（目前只有 data URL 图片）。
  *
@@ -110,8 +108,9 @@ const EMPTY = new Uint8Array(0);
 class PackedStore {
   readonly file = PACKED_FILE;
   private chunks: Uint8Array[] = [];
+  /** 与 chunks 一一对应的块哈希，按同一顺序参与块表摘要 */
+  private hashes: Uint8Array[] = [];
   private seen = new Map<string, PackedRange>();
-  private merged: Uint8Array | null = null;
   bytes = 0;
 
   async add(bytes: Uint8Array): Promise<PackedRange> {
@@ -121,56 +120,73 @@ class PackedStore {
     const range: PackedRange = [this.bytes, bytes.length];
     this.seen.set(sha256, range);
     this.chunks.push(bytes);
+    this.hashes.push(hexToBytes(sha256));
     this.bytes += bytes.length;
     return range;
   }
 
   /** 在序列化前回收死亡区间；共享的 range 元组让存活引用同步得到新偏移 */
   retain(live: ReadonlySet<PackedRange>): void {
-    if (this.merged) throw new Error('打包块已拼接，不能再回收区间');
     let read = 0;
     let write = 0;
     let offset = 0;
     for (const [hash, range] of this.seen) {
-      const chunk = this.chunks[read++];
+      const chunk = this.chunks[read];
+      const digest = this.hashes[read];
+      read += 1;
       if (!live.has(range)) {
         this.seen.delete(hash);
         continue;
       }
       range[0] = offset;
-      this.chunks[write++] = chunk;
+      this.chunks[write] = chunk;
+      this.hashes[write] = digest;
+      write += 1;
       offset += chunk.length;
     }
     this.chunks.length = write;
+    this.hashes.length = write;
     this.bytes = offset;
   }
 
-  /** 拼成一条缓冲：只在写包时调用一次，拼完原始分块立刻释放 */
-  concat(): Uint8Array {
-    if (this.merged) return this.merged;
-    if (this.chunks.length === 1) {
-      this.merged = this.chunks[0];
-      this.chunks = [];
-      return this.merged;
-    }
-    const out = new Uint8Array(this.bytes);
-    let at = 0;
-    for (let index = 0; index < this.chunks.length; index++) {
-      const chunk = this.chunks[index];
-      out.set(chunk, at);
-      at += chunk.length;
-      // 逐块清引用：复制完一块即可回收一块，拼接结束后只剩 out 一份。
-      // 峰值仍在分配瞬间——存活字节 × 2；回收死亡区间后这个基数随之变小
-      this.chunks[index] = EMPTY;
-    }
-    this.chunks = [];
-    this.merged = out;
-    return out;
+  /**
+   * 分块视图：写包时按顺序送进压缩流。
+   *
+   * 拼成一条缓冲会多占一整份与打包块等长的内存（存活字节 × 2），而这批字节本来
+   * 就是逐张图片解码出来的，顺序即可。
+   */
+  get parts(): readonly Uint8Array[] {
+    return this.chunks;
+  }
+
+  /**
+   * 块表摘要：按顺序拼接各块 SHA-256 后再取一次 SHA-256。
+   *
+   * 打包块的内容由「哪些块、按什么顺序」完全决定（每条 `$ab:range` 都落在块上），
+   * 所以这个摘要同样唯一标识整块；真正的逐字节哈希要 37 MB 连续缓冲，
+   * 而恢复侧只用 `bytes` 与 zip CRC 校验，这个值不参与校验。
+   */
+  async digest(): Promise<string> {
+    return sha256Hex(concatHashes(this.hashes));
   }
 
   get count(): number {
     return this.seen.size;
   }
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const out = new Uint8Array(hex.length / 2);
+  for (let index = 0; index < out.length; index++) {
+    out[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
+  return out;
+}
+
+function concatHashes(hashes: readonly Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(hashes.length * 32);
+  hashes.forEach((hash, index) => out.set(hash, index * 32));
+  return out;
 }
 
 /** 内容寻址：同一份字节只写一次，多条引用共用一个 data/ 文件 */
@@ -221,10 +237,23 @@ export class BlobTable {
     if (this.packedStore?.count === 0) this.packedStore = null;
   }
 
-  /** 打包块：没有 data URL 时返回 null */
-  packed(): { file: string; bytes: Uint8Array; count: number } | null {
-    if (!this.packedStore) return null;
-    return { file: this.packedStore.file, bytes: this.packedStore.concat(), count: this.packedStore.count };
+  /** 打包块：没有 data URL 时返回 null。分块直接交给写端，不拼整段 */
+  async packed(): Promise<{
+    file: string;
+    parts: readonly Uint8Array[];
+    bytes: number;
+    count: number;
+    digest: string;
+  } | null> {
+    const store = this.packedStore;
+    if (!store) return null;
+    return {
+      file: store.file,
+      parts: store.parts,
+      bytes: store.bytes,
+      count: store.count,
+      digest: await store.digest(),
+    };
   }
 
   /** 引用闭合的收尾：没人引用的 blob 不进包，缺引用由调用方中止导出 */

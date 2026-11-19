@@ -6,16 +6,50 @@ import { dosTime, localHeader, centralHeader, eocdRecord, type ZipEntryHeader } 
 import { CENTRAL_SIZE, EOCD_SIZE, LOCAL_SIZE, MAX_ENTRIES, MAX_UINT32 } from '../core/zipstruct';
 // CRC 放在 core：读端也要用它校验解出来的字节，而 core 不能引用 pack
 export { createCrc32, crc32, type Crc32 } from '../core/crc32';
-import { crc32 } from '../core/crc32';
+import { createCrc32, crc32 } from '../core/crc32';
+
+/**
+ * 条目载荷：单块或分块。
+ *
+ * 分块让压缩流把读到的每一段直接交给写端，不必先拼成一条与压缩结果等长的缓冲。
+ * 顺序即文件内容的顺序。
+ */
+export type ZipPayload = Uint8Array | readonly Uint8Array[];
+
+export function payloadLength(data: ZipPayload): number {
+  if (!Array.isArray(data)) return (data as Uint8Array).length;
+  let total = 0;
+  for (const part of data as readonly Uint8Array[]) total += part.length;
+  return total;
+}
+
+/** STORE 条目缺省按载荷算 CRC；分块与单块走同一份实现 */
+function payloadCrc(data: ZipPayload): number {
+  if (!Array.isArray(data)) return crc32(data as Uint8Array);
+  const crc = createCrc32();
+  for (const part of data as readonly Uint8Array[]) crc.update(part);
+  return crc.digest();
+}
+
+async function writePayload(sink: ByteSink, data: ZipPayload): Promise<void> {
+  if (!Array.isArray(data)) {
+    const bytes = data as Uint8Array;
+    if (bytes.length > 0) await sink.write(bytes);
+    return;
+  }
+  for (const part of data as readonly Uint8Array[]) {
+    if (part.length > 0) await sink.write(part);
+  }
+}
 
 export interface ZipEntry {
   name: string;
-  data: Uint8Array;
+  data: ZipPayload;
   /** 默认 0（STORE） */
   method?: ZipMethod;
-  /** 未压缩长度；STORE 条目缺省等于 data.length，压缩条目必须显式给 */
+  /** 未压缩长度；STORE 条目缺省等于载荷长度，压缩条目必须显式给 */
   size?: number;
-  /** 未压缩数据的 CRC；STORE 条目缺省按 data 算，压缩条目必须显式给 */
+  /** 未压缩数据的 CRC；STORE 条目缺省按载荷算，压缩条目必须显式给 */
   crc?: number;
   time?: Date;
 }
@@ -33,14 +67,15 @@ function assertCapacity(what: string, value: number, limit: number): void {
 /** 本地头与中央目录共用条目派生值，避免长度或 CRC 不一致。 */
 function factsOf(entry: ZipEntry, fallbackTime: Date): ZipEntryHeader {
   const stamp = dosTime(entry.time ?? fallbackTime);
-  assertCapacity(`条目 ${entry.name} 的压缩后长度`, entry.data.length, MAX_UINT32);
-  assertCapacity(`条目 ${entry.name} 的原始长度`, entry.size ?? entry.data.length, MAX_UINT32);
+  const comp = payloadLength(entry.data);
+  assertCapacity(`条目 ${entry.name} 的压缩后长度`, comp, MAX_UINT32);
+  assertCapacity(`条目 ${entry.name} 的原始长度`, entry.size ?? comp, MAX_UINT32);
   return {
     nameBytes: new TextEncoder().encode(entry.name),
     method: entry.method ?? 0,
-    crc: entry.crc ?? crc32(entry.data),
-    comp: entry.data.length,
-    size: entry.size ?? entry.data.length,
+    crc: entry.crc ?? payloadCrc(entry.data),
+    comp,
+    size: entry.size ?? comp,
     time: stamp.time,
     date: stamp.date,
   };
@@ -72,7 +107,7 @@ export function zipPlanSize(entries: readonly ZipPlanEntry[]): number {
  * 而这时所有条目的长度与 CRC 都已算好（条目在装配前就压完了），不必先产出字节。
  */
 export function zipSize(entries: readonly ZipEntry[]): number {
-  return zipPlanSize(entries.map(entry => ({ name: entry.name, comp: entry.data.length })));
+  return zipPlanSize(entries.map(entry => ({ name: entry.name, comp: payloadLength(entry.data) })));
 }
 
 export function zipBytes(entries: readonly ZipEntry[]): Uint8Array {
@@ -81,7 +116,7 @@ export function zipBytes(entries: readonly ZipEntry[]): Uint8Array {
 
   let total = EOCD_SIZE;
   for (let index = 0; index < entries.length; index++) {
-    total += LOCAL_SIZE + facts[index].nameBytes.length + entries[index].data.length;
+    total += LOCAL_SIZE + facts[index].nameBytes.length + facts[index].comp;
     total += CENTRAL_SIZE + facts[index].nameBytes.length;
   }
 
@@ -94,8 +129,16 @@ export function zipBytes(entries: readonly ZipEntry[]): Uint8Array {
     const header = localHeader(facts[index]);
     out.set(header, offset);
     offset += header.length;
-    out.set(entries[index].data, offset);
-    offset += entries[index].data.length;
+    const data = entries[index].data;
+    if (Array.isArray(data)) {
+      for (const part of data as readonly Uint8Array[]) {
+        out.set(part, offset);
+        offset += part.length;
+      }
+    } else {
+      out.set(data as Uint8Array, offset);
+      offset += (data as Uint8Array).length;
+    }
   }
 
   const centralStart = offset;
@@ -137,8 +180,8 @@ export class ZipWriter {
     const header = localHeader(facts);
     await this.sink.write(header);
     this.offset += header.length;
-    if (entry.data.length > 0) await this.sink.write(entry.data);
-    this.offset += entry.data.length;
+    await writePayload(this.sink, entry.data);
+    this.offset += facts.comp;
     this.onProgress?.(this.offset);
   }
 
