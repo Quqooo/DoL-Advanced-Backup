@@ -1034,8 +1034,9 @@
 	margin-top: 10px;
 }
 
-/* 纯文字说明：没有边框与底色。说明块（.advbk-note）是给状态行用的，套在一句解释上像输入框 */
-.advbk-hint {
+/* 纯文字说明：没有边框与底色。说明块（.advbk-note）是给状态行用的，套在一句解释上像输入框。
+   限定在控制分区内：.advbk-hint 也是提示块的行类名，这里的下外边距会把行里的文字顶偏 */
+.advbk-control-section > .advbk-hint {
 	margin: 0 0 10px;
 	color: var(--advbk-muted);
 	font-size: 12px;
