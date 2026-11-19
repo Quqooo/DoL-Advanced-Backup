@@ -13,6 +13,7 @@ scripts/e2e.mjs
 scripts/e2e-matrix.mjs
 scripts/probes.mjs
 scripts/lib/unit.mjs
+scripts/lib/export-stub.mjs
 scripts/lib/zip-info.mjs
 
 scripts/lib/samegraph.ts
