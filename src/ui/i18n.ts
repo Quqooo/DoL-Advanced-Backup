@@ -128,12 +128,10 @@ export interface Strings {
   hintDeltaDowngrade: (count: number) => string;
   hintSideloadMod: (count: number) => string;
   hintOrphanData: (count: number) => string;
-  hintUnknownData: (count: number) => string;
-  /** 上面四条提示的悬停说明：讲后果，不给建议 */
+  /** 上面三条提示的悬停说明：讲后果，不给建议 */
   hintDeltaDowngradeTip: string;
   hintSideloadModTip: string;
   hintOrphanDataTip: string;
-  hintUnknownDataTip: string;
   snapshotNew: string;
   snapshotNone: string;
   snapshotMissing: string;
@@ -426,11 +424,9 @@ const ZH: Strings = {
   hintDeltaDowngrade: count => `带增量段的存档：${count}（本机游戏版本低于 0.5.6.10）`,
   hintSideloadMod: count => `内置模组或远程模组：${count}（恢复时将被安装为旁加载模组）`,
   hintOrphanData: count => `找不到所属模组的模组数据：${count}`,
-  hintUnknownData: count => `未识别的数据：${count}`,
   hintDeltaDowngradeTip: '增量段从游戏 0.5.6.10 起才有。恢复到更低版本时，这些存档打不开。',
   hintSideloadModTip: '这些模组由构建注入或来自远程列表，本机存储里没有它们。恢复时会把它们作为旁加载模组写进模组存储；构建里已有同名模组时，会多出一份副本。',
   hintOrphanDataTip: '映射表认识这些数据，但本机没有对应的模组。勾选的条目照常处理；恢复后可能没有模组读取它们。',
-  hintUnknownDataTip: '本模组不认识这些条目，会按原样处理。',
   snapshotNew: '新建快照',
   snapshotNone: '暂无',
   snapshotMissing: '快照不存在或已损坏',
@@ -826,11 +822,9 @@ const EN: Strings = {
   hintDeltaDowngrade: count => `Delta saves: ${count} (this game is below 0.5.6.10)`,
   hintSideloadMod: count => `Built-in or remote mods: ${count} (installed as sideloaded mods when restored)`,
   hintOrphanData: count => `Mod data with no installed mod: ${count}`,
-  hintUnknownData: count => `Unidentified data: ${count}`,
   hintDeltaDowngradeTip: 'Delta sections exist since game 0.5.6.10. On an older version these saves cannot be opened.',
   hintSideloadModTip: 'These mods are injected by the build or come from a remote list, so no storage layer holds them here. A restore writes them into mod storage as sideloaded mods; a built-in mod of the same name gains a duplicate.',
   hintOrphanDataTip: 'The mapping table knows this data, but no matching mod is installed. Selected items are handled as usual, and may have no reader after a restore.',
-  hintUnknownDataTip: 'This mod does not know these entries. They are handled as they are.',
   snapshotNew: 'New Snapshot',
   snapshotNone: 'None',
   snapshotMissing: 'Snapshot missing or corrupted',

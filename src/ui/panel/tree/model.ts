@@ -319,7 +319,7 @@ export function enforceForced(selection: ReadonlySet<string>, items: readonly It
   return out;
 }
 
-export type WarningCode = 'moddata-orphan' | 'sideload-mod' | 'delta-downgrade' | 'unknown-data';
+export type WarningCode = 'moddata-orphan' | 'sideload-mod' | 'delta-downgrade';
 
 export interface DepsContext {
   gameVersion: string;
@@ -354,9 +354,6 @@ export function softWarnings(
     if (item.kind === 'save' && item.flags?.delta && ctx.gameVersion
       && compareVersion(ctx.gameVersion, DELTA_FLOOR) < 0) {
       out.push({ code: 'delta-downgrade', addr: item.addr });
-    }
-    if (categoryOfGroup(item.group) === 'other') {
-      out.push({ code: 'unknown-data', addr: item.addr });
     }
   }
   return out;

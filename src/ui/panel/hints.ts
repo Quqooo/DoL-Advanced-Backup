@@ -11,20 +11,18 @@ import { itemLabel, type DepsWarning, type WarningCode } from './tree/model';
  */
 
 /** 显示顺序：恢复后读不出来的排前面，纯提示的垫底 */
-const ORDER: readonly WarningCode[] = ['delta-downgrade', 'sideload-mod', 'moddata-orphan', 'unknown-data'];
+const ORDER: readonly WarningCode[] = ['delta-downgrade', 'sideload-mod', 'moddata-orphan'];
 
 const TEXT: Record<WarningCode, (strings: Strings, count: number) => string> = {
   'delta-downgrade': (strings, count) => strings.hintDeltaDowngrade(count),
   'sideload-mod': (strings, count) => strings.hintSideloadMod(count),
   'moddata-orphan': (strings, count) => strings.hintOrphanData(count),
-  'unknown-data': (strings, count) => strings.hintUnknownData(count),
 };
 
 const TIP: Record<WarningCode, (strings: Strings) => string> = {
   'delta-downgrade': strings => strings.hintDeltaDowngradeTip,
   'sideload-mod': strings => strings.hintSideloadModTip,
   'moddata-orphan': strings => strings.hintOrphanDataTip,
-  'unknown-data': strings => strings.hintUnknownDataTip,
 };
 
 /** 悬停明细最多列这么多行：数量本身在正文里，列表只是让用户认得出是哪几条 */
