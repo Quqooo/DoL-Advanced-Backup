@@ -109,6 +109,7 @@ export async function packTo(
         crc32: hex32(encoded.crc),
         ...(task.slots !== undefined ? { slots: task.slots } : {}),
         ...(task.db !== undefined ? { db: task.db } : {}),
+        ...(task.records !== undefined ? { records: task.records } : {}),
       });
     },
   });

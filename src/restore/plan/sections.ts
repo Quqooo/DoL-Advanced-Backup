@@ -75,7 +75,7 @@ type SectionKey = 'keys' | 'saves' | 'idb' | 'mods';
  * 按文件数平分会让进度条在整库这一段落上停住。
  *
  * v1/v2 的整库只有一条 `idb.json`，这里读它的骨架（只数条数、不建记录），
- * 记录留给 `applyDbs` 逐库切片解析。v3 起一个库一条 `idb/<n>.json`，
+ * 记录留给 `applyDbs` 逐库切片解析。v3 起一个库一条 `idb/<库名>.json`，
  * 结构、条数与索引全在清单里，这一趟不读整库字节——只恢复存档时也就不必解压它。
  */
 export async function readSections(

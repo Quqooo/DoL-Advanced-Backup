@@ -8,7 +8,7 @@ export const MANIFEST_APP = 'AdvancedBackup';
  * 写 3、读 1..3：v1 包里的值编码是有损的旧写法，必须继续能读；更新版本的包一律拒绝。
  * 旧模组（dol-data-sync）的包 `format` 也是 1，靠 `app` 挡掉。
  *
- * v3 把整库从单条 `idb.json` 拆成每个库一条 `idb/<n>.json`：恢复时按需读一个库，
+ * v3 把整库从单条 `idb.json` 拆成每个库一条 `idb/<库名>.json`：恢复时按需读一个库，
  * 勾掉整库或只恢复存档时不再解压上百 MB；导出也逐库压缩进包。
  */
 export const FORMAT_WRITE = 3;
@@ -44,8 +44,10 @@ export interface ManifestSection {
   slots?: number;
   /** v2 及更早：整库只有一条分区，这里是实际写入的库数 */
   dbs?: number;
-  /** v3 起：这一条分区是哪个库（`file` 是 `idb/<n>.json`） */
+  /** v3 起：这一条分区是哪个库（`file` 是 `idb/<库名>.json`） */
   db?: string;
+  /** 整库分区：这个库的记录条数（`entries` 按一个库算一条，行上显示的是这个数） */
+  records?: number;
 }
 
 export interface ManifestModItem {
@@ -117,7 +119,7 @@ export interface IndexSave {
 
 export interface IndexDb {
   name: string;
-  /** 这个库编码后的字节数（v3 是 `idb/<n>.json` 的未压缩长度） */
+  /** 这个库编码后的字节数（v3 是 `idb/<库名>.json` 的未压缩长度） */
   b: number;
 }
 
@@ -153,7 +155,7 @@ export function entriesOf(manifest: Pick<Manifest, 'sections'>): number {
 /**
  * 每个库的分区文件。
  *
- * v3 起一个库一条 `idb/<n>.json`，库名与文件的对应只在清单里；
+ * v3 起一个库一条 `idb/<库名>.json`，库名与文件的对应只在清单里；
  * v1/v2 是单条 `idb.json`（按库切片读），这里返回空表。
  */
 export function dbFilesOf(manifest: Pick<Manifest, 'format' | 'sections'>): Map<string, string> {
@@ -238,6 +240,7 @@ export function parseManifest(raw: unknown): ParseResult {
     if (section.slots !== undefined && !isCount(section.slots)) return { ok: false, error: 'shape' };
     if (section.dbs !== undefined && !isCount(section.dbs)) return { ok: false, error: 'shape' };
     if (section.db !== undefined && typeof section.db !== 'string') return { ok: false, error: 'shape' };
+    if (section.records !== undefined && !isCount(section.records)) return { ok: false, error: 'shape' };
     // v3 起整库一库一条：缺了 `db` 就不知道这条分区属于哪个库
     if (format >= 3 && section.id === 'idb' && typeof section.db !== 'string') return { ok: false, error: 'shape' };
   }

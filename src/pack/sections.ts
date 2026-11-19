@@ -14,6 +14,7 @@ import { messageError } from '../core/error';
 import { createJsonWriter, type JsonSink } from '../core/jsonwrite';
 import { legacyHasSave } from '../core/legacy';
 import type { IndexDb, IndexKey, IndexSave, ManifestIndex } from '../core/manifest';
+import { sanitizeName } from '../core/naming';
 import { dateOf, saveIdOf, saveNameOf } from '../core/savemeta';
 import { databases, type DbKey } from '../store/idb';
 import { openDbReader, type DbReader } from '../store/idb/dump';
@@ -28,7 +29,7 @@ import type { UnsupportedPolicy } from './types';
 /**
  * 一个分区文件：`write` 负责序列化进 sink。
  *
- * v3 起整库一个库一条分区（`idb/<n>.json`），`db` 记库名；小分区一次写完，
+ * v3 起整库一个库一条分区（`idb/<库名>.json`），`db` 记库名；小分区一次写完，
  * 整库从一致性缓存分页编码，编码结果流式写出。
  */
 export interface SectionTask {
@@ -41,6 +42,8 @@ export interface SectionTask {
   slots?: number;
   /** 整库分区：这条文件是哪个库 */
   db?: string;
+  /** 整库分区：写完才知道的记录条数 */
+  records?: number;
   write(sink: JsonSink): Promise<void>;
 }
 
@@ -179,7 +182,7 @@ function databaseTask(
   /** 写完交出这个库的字节数；索引按它显示体积 */
   onDone: (bytes: number) => void,
 ): SectionTask {
-  return {
+  const task: SectionTask = {
     id: 'idb',
     file,
     db: name,
@@ -193,6 +196,7 @@ function databaseTask(
         },
       };
       const writer = createJsonWriter(counted);
+      let records = 0;
       writer.raw(`{"name":${JSON.stringify(name)},"version":${reader.version},"stores":[`);
       let firstStore = true;
       for (const store of reader.stores) {
@@ -217,6 +221,7 @@ function databaseTask(
             if (!firstRecord) writer.raw(',');
             firstRecord = false;
             writer.value(encoded);
+            records += 1;
           }
           after = page[page.length - 1].key;
           if (page.length < PAGE) break;
@@ -225,9 +230,25 @@ function databaseTask(
       }
       writer.raw(']}');
       await writer.flush();
+      task.records = records;
       onDone(written);
     },
   };
+  return task;
+}
+
+/**
+ * 包内文件名取库名，非法字符与超长交给 `sanitizeName`。
+ *
+ * 库名只保证互不相同，过滤之后却可能撞名：只差大小写，或多个非法字符都换成了
+ * 同一个下划线。ZIP 路径必须唯一，撞名时追加 `~2`、`~3`。`used` 的键是小写文件名。
+ */
+function dbFileName(name: string, used: Set<string>): string {
+  const base = `idb/${sanitizeName(name)}`;
+  let file = `${base}.json`;
+  for (let n = 2; used.has(file.toLowerCase()); n++) file = `${base}~${n}.json`;
+  used.add(file.toLowerCase());
+  return file;
 }
 
 function saveSlots(selected: ReadonlySet<string>): Set<number> {
@@ -416,12 +437,11 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
     const skipUnsupportedDb = policy === 'abort' ? undefined : skipUnsupported;
     // 每读完一个库推进一份；整库的进度就在这一段里，不再有更细的刻度
     const dbIndex: IndexDb[] = [];
-    /** 已经写进包的库数：文件名按它连续编号，跳过的库不留空号 */
-    let written = 0;
+    /** 已用过的文件名（小写）：库名过滤后可能撞名，先在这里判重 */
+    const usedFiles = new Set<string>();
     for (const name of wantedDbs) {
       const reader = await openDbReader(name);
       if (!reader) throw messageError('packSelectionMissing', name);
-      // 文件名不能直接取库名：库名可能含 `/`、超长，或与别的库只差大小写
       let file: string | null = null;
       try {
         const failure = skipUnsupportedDb ? await databaseUnsupported(name, reader) : null;
@@ -430,10 +450,9 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
           skipped.add(idbAddr(name));
         } else {
           if (failure) throw failure;
-          file = `idb/${written}.json`;
+          file = dbFileName(name, usedFiles);
           announce(file);
           await onSection(databaseTask(name, file, reader, blobs, refs, bytes => dbIndex.push({ name, b: bytes })));
-          written += 1;
         }
       } finally {
         reader.close();

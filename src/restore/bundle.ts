@@ -217,7 +217,7 @@ export async function openBundle(source: Uint8Array | Blob): Promise<Bundle> {
    * v1/v2 的 `idb.json` 一次恢复会被骨架、预检、写入三处读；它可能有上百 MB，
    * 每处都解一遍既费时间又反复占内存。只缓存这一份，其余条目照旧按需读。
    *
-   * v3 的整库是每个库一条 `idb/<n>.json`：缓存它们等于把整库重新压在内存里，
+   * v3 的整库是每个库一条 `idb/<库名>.json`：缓存它们等于把整库重新压在内存里，
    * 恢复侧按「读一个库、用完即弃」处理，这里不缓存。
    */
   let idbBytes: Uint8Array | null = null;

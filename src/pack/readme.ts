@@ -1,10 +1,20 @@
 import type { Manifest } from '../core/manifest';
 
-/** 分区清单：文件名对齐，后面跟条目数 */
-function sectionLines(manifest: Manifest, entryWord: string): string {
-  const lines = manifest.sections.map(
-    section => `  ${section.file.padEnd(20)}${section.entries} ${entryWord}`,
-  );
+/**
+ * 分区清单：文件名对齐，后面跟条目数。
+ *
+ * 整库一条分区就是一个库，`entries` 固定为 1；行上给的是库内记录条数，
+ * 否则一个上万条记录的库会写成「1 项」。
+ * 列宽取最长文件名与 20 之中较大者：库文件名是库名，可能比原来的编号长。
+ */
+function sectionLines(manifest: Manifest, entryWord: string, recordWord: string): string {
+  const width = Math.max(20, ...manifest.sections.map(section => section.file.length));
+  const lines = manifest.sections.map(section => {
+    const amount = section.records !== undefined
+      ? `${section.records} ${recordWord}`
+      : `${section.entries} ${entryWord}`;
+    return `  ${section.file.padEnd(width)}${amount}`;
+  });
   return lines.length > 0 ? lines.join('\n') : '  -';
 }
 
@@ -49,14 +59,14 @@ function chinesePart(manifest: Manifest, selfRestore: boolean): string {
     '  mapping.json         外部模组数据的分组映射；恢复页据此显示分组名',
     '  keys.json            浏览器存储里的单个键：localStorage、sessionStorage',
     '  saves.json           存档槽与存档明细，两者按槽号一一对应',
-    '  idb/*.json           每个 IndexedDB 库一条：仓库、索引与全部记录',
+    '  idb/*.json           每个 IndexedDB 库一条，文件名取库名：仓库、索引与全部记录',
     '  mods.json            模组的启用顺序与禁用列表',
     '  mods/*.zip           模组本体，可直接拖进 ModLoader 的模组管理器',
     '  mods/*.modpack       同上，但原包是 ModLoader 的 ModPack 容器，按原样保留',
     '  data/*.bin           无法命名的二进制，文件名是内容哈希的前 16 位',
     '',
     '本次包含的分区',
-    sectionLines(manifest, '项'),
+    sectionLines(manifest, '项', '条记录'),
     '',
     ...(selfRestore
       ? [
@@ -105,14 +115,14 @@ function englishPart(manifest: Manifest, selfRestore: boolean): string {
     '  mapping.json         Group mapping for mod data. The restore tab uses it for group names',
     '  keys.json            Single keys in browser storage: localStorage, sessionStorage',
     '  saves.json           Save slots and save details, paired by slot number',
-    '  idb/*.json           One file per IndexedDB database: stores, indexes, and all records',
+    '  idb/*.json           One file per IndexedDB database, named after it: stores, indexes, and all records',
     '  mods.json            Mod load order and disabled list',
     '  mods/*.zip           Mod files. Drag them into the ModLoader mod manager',
     '  mods/*.modpack       Same, but the original was a ModPack container and is kept as-is',
     '  data/*.bin           Unnamed binary data. The file name is the first 16 characters of the content hash',
     '',
     'Sections in this pack',
-    sectionLines(manifest, 'entries'),
+    sectionLines(manifest, 'entries', 'records'),
     '',
     ...(selfRestore
       ? [
