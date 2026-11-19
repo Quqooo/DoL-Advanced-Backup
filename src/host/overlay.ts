@@ -39,7 +39,7 @@ function hideForeign(content: HTMLElement): void {
   const foreign = [...content.childNodes].filter(node => node !== panelHost && node !== shim);
   if (foreign.length === 0) return;
   // 覆盖层重建时旧的隐藏容器会随之移除，里面的节点已经作废；
-  // 继续往里塞会把新内容接到游离节点上，插回来后看起来是空白。
+  // 继续写入会把新内容接到游离节点上，插回来后看起来是空白。
   if (shim && !shim.isConnected) shim = null;
   if (!shim) {
     shim = document.createElement('div');
@@ -70,7 +70,7 @@ function isOwnOverlay(): boolean {
   return !!overlay && overlay.getAttribute('data-overlay') === OVERLAY && !overlay.classList.contains('hidden');
 }
 
-/** 原版内容可能在我们切过来之后才落进容器（`<<replace>>` 是异步的），得一直盯着 */
+/** 原版内容可能在切换之后才落进容器（`<<replace>>` 是异步的），得一直盯着 */
 function watchContent(content: HTMLElement): void {
   contentWatch?.disconnect();
   watchedContent = content;
@@ -134,7 +134,7 @@ function mountPanel(): HTMLElement | null {
  *
  * 文案在建 DOM 那一刻就写死了（见 `renderPanel`），换语言只能换掉整棵子树。
  * 换节点比让用户重载整个游戏轻得多——重载会回到存档点，而这里游戏不动。
- * 代价是恢复页已选的包与勾选会清空，所以有任务在跑时调用方要先挡住。
+ * 代价是恢复页已选的包与勾选会清空，所以有任务在跑时调用方要先拦截。
  */
 export function rebuildPanel(): void {
   if (!render || !panelEl) return;
@@ -193,7 +193,6 @@ export function enterTab(): void {
   }
   publishLabel();
   hideForeign(content);
-  // 上一个分页的内容是异步渲染的，可能在我们切过来之后才落进容器，得一直盯着
   watchContent(content);
   if (!panelHost || !panelHost.isConnected) {
     panelHost = document.createElement('div');
@@ -225,7 +224,7 @@ function onDocumentClick(event: MouseEvent): void {
   if (!tabEl || !tabBar) return;
   const target = event.target as Element | null;
   if (!target) return;
-  // 侧栏入口会换掉整个覆盖层：先停手，别把新页面刚渲染的原版内容藏起来
+  // 侧栏入口会换掉整个覆盖层：先停手，以免隐藏新页面刚渲染的原版内容
   if (target.closest('#overlayButtons')) {
     leaveOverlay();
     return;

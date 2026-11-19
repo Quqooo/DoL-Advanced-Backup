@@ -170,7 +170,7 @@ export const MAPPING: readonly MappingEntry[] = [
   },
   {
     // 主库放配置镜像与记忆备份，像素图的配置与插画缓存另开一个库；
-    // 其余 aiStoryGen_ / aiPixelGen_ 键是记忆缓存与旧版记忆键，按前缀兜住
+    // 其余 aiStoryGen_ / aiPixelGen_ 键是记忆缓存与旧版记忆键，按前缀归入
     mod: 'AIStoryGen',
     label: 'mapWovenRealm',
     keys: [

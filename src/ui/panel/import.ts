@@ -379,7 +379,7 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     const file = picker.files?.[0];
     picker.value = '';
     if (!file) return;
-    // 换成外部 zip 了：下拉退回「从快照」占位项，别继续显示上一次选的快照
+    // 换成外部 zip 了：下拉退回「从快照」占位项，不继续显示上一次选的快照
     snapshotSelect.value = '';
     void load(file, file.name);
   });

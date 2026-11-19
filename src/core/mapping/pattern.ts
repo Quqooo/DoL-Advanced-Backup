@@ -61,7 +61,7 @@ export function badgeOfRule(rule: Rule): string {
 
 /**
  * 正则来源长度上限。包内映射与第三方注册都是外部输入，长度不设限时
- * 一条超长表达式就能让导入卡在编译或匹配上。
+ * 一条超长表达式就能让导入停在编译或匹配上。
  */
 export const MAX_PATTERN_SOURCE = 512;
 
@@ -69,7 +69,7 @@ export const MAX_PATTERN_SOURCE = 512;
  * 拒绝经典的嵌套量词（`(a+)+` / `(a*)*` / `(a{2,})+`）：它们对不匹配的输入
  * 指数级回溯。`(ab+)?` 这类外层是可选的不加倍，不拦。
  *
- * 只能挡住这种写法；`(a|aa)+` 一类靠分支重叠的回溯仍可能很慢，长度上限是第二道约束。
+ * 只能拦截这种写法；`(a|aa)+` 一类靠分支重叠的回溯仍可能很慢，长度上限是第二道约束。
  */
 export function patternIssue(source: string): string | null {
   if (source.length > MAX_PATTERN_SOURCE) return 'patternTooLong';

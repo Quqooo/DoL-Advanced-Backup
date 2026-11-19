@@ -40,7 +40,7 @@ export interface ExportOutcome {
  */
 async function optionsOf(overrides?: Partial<PackOptions>): Promise<PackOptions> {
   const prefs = readPrefs();
-  // ZSTD 档不支持自恢复包（JSZip 认不出 method 93），连读脚本都省掉
+  // ZSTD 档不支持自恢复包（JSZip 认不出 method 93），连读脚本也省去
   const script = prefs.selfRestore && prefs.compression !== 'zstd' ? await readSelfScript() : null;
   return {
     compression: prefs.compression,
@@ -78,14 +78,14 @@ export async function buildPackage(request: ExportRequest = {}): Promise<PackRes
 
 export async function exportPackage(request: ExportRequest = {}): Promise<ExportOutcome> {
   const createdAt = request.createdAt ?? new Date().toISOString();
-  // 先要落盘句柄：选择器必须在点击的同一拍里打开，压缩几十秒后手势就过期了。
+  // 先要落盘句柄：选择器必须在点击的同一次回调里打开，压缩几十秒后手势就过期了。
   // 名字按同一份偏好预估：套容器与否是用户勾选的，压缩前就知道；
   // 恢复脚本实际读不到时 pack 会退回普通包，名字多一段 -modpack 无伤大雅。
   const prefs = readPrefs();
   const estWrap = prefs.modpackWrap && prefs.selfRestore && prefs.compression !== 'zstd';
   request.onProgress?.({ phase: 'pick', ratio: 0 });
   const sink = await openSink(packName(new Date(createdAt), estWrap ? '-modpack' : ''));
-  // 整包边压边写进句柄：文件流直接落盘，下载与安卓壳攒成分块再由 Blob 接管
+  // 整包边压边写进句柄：文件流直接落盘，下载与安卓壳累积分块再由 Blob 接管
   const stream = sink.stream();
   try {
     // 采集与读脚本都在这里：它可能抛错，此时句柄已经打开，同样要收掉

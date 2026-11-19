@@ -11,7 +11,7 @@ const INTERVAL = 5000;
 
 let timer: number | null = null;
 
-/** 恢复包自己的对话框在，说明它正在处理，别抢 */
+/** 恢复包自己的对话框在，说明它正在处理，此时不接管 */
 function occupied(): boolean {
   return Boolean(document.querySelector('[data-advbk-boot]'));
 }
@@ -29,7 +29,7 @@ export function startPackWatch(onFound: (packs: StoredPack[]) => void): void {
     known = new Set(all);
     if (occupied()) return;
     if (fresh !== null && fresh.length === 0) return;
-    // 第一轮没有「新名字」可依，全量看一遍；之后只看这一轮新出现的，别为装一个普通模组重读整库
+    // 第一轮没有「新名字」可依，全量看一遍；之后只看这一轮新出现的，避免为装一个普通模组重读整库
     const packs = await findStoredPacks(fresh ?? undefined);
     if (packs.length > 0) onFound(packs);
   };

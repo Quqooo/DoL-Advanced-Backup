@@ -168,7 +168,7 @@ function openDialog(pack: RestorePack): void {
         return;
       }
       status.textContent = strings.restorePackDone;
-      // 重载是本任务发起的：先撤守卫，别让浏览器再问一次
+      // 重载是本任务发起的：先撤守卫，避免浏览器再次询问
       releaseUnload();
       location.reload();
     } catch (error) {

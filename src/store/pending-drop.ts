@@ -63,7 +63,7 @@ function save(names: readonly string[]): void {
  * 任何时候都不删的库。
  *
  * 游戏存档库与 ModLoader 库重载后会被各自的持有者重建（`idb.init` 的 `dbUpgrade`、
- * `idb-keyval` 的 `createStore`），删了等于白删。快照库不在这里：它属于本模组的数据，
+ * `idb-keyval` 的 `createStore`），删除后会被重新创建。快照库不在这里：它属于本模组的数据，
  * 只有关掉「保留本模组」的干净恢复才会把它记进标记，清理按标记放行（见 `app/cleanup.ts`）。
  */
 export function isProtectedDb(name: string): boolean {

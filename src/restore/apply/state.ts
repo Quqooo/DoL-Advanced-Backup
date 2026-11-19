@@ -7,7 +7,7 @@ import type { RestorePlan, RestoreReport, RestoreWarning } from '../types';
 export interface ApplyInput {
   plan: RestorePlan;
   selected: ReadonlySet<string>;
-  /** 这次恢复是恢复包自己在跑：包里那份正本要照装，不能按「别覆盖自己」跳过 */
+  /** 这次恢复是恢复包自己在跑：包里那份正本要照装，不能按「不覆盖自己」跳过 */
   selfPack?: boolean;
   /** 干净恢复下本模组及其数据是否豁免删除；缺省豁免 */
   keepSelf?: boolean;

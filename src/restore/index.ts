@@ -21,7 +21,7 @@ export interface RestoreInput {
   selected?: ReadonlySet<string>;
   /** 干净恢复下本模组及其数据是否豁免删除；缺省豁免 */
   keepSelf?: boolean;
-  /** 这次恢复由恢复包自己发起：包里那份正本要照装，不按「别覆盖自己」跳过 */
+  /** 这次恢复由恢复包自己发起：包里那份正本要照装，不按「不覆盖自己」跳过 */
   selfPack?: boolean;
   /** 本机现状：删除预告与镜像都靠它做差集 */
   scanned?: { items: Item[] } | null;

@@ -83,7 +83,7 @@ export async function deflateRaw(
   return packed;
 }
 
-/** 采样试压：压不动就别压，省时间也省不了体积 */
+/** 采样试压：压不动就不压，省时间且体积不会更小 */
 async function worthCompressing(bytes: Uint8Array): Promise<boolean> {
   if (bytes.length < 1024) return false;
   const sample = bytes.subarray(0, Math.min(SAMPLE, bytes.length));
@@ -204,7 +204,7 @@ export async function encodeStream(
     return { data: concatChunks(chunks, total), method: 8, size: fed, crc: crc.digest() };
   }
 
-  // 没有 CompressionStream 的旧 WebView：只能先攒整段再压
+  // 没有 CompressionStream 的旧 WebView：只能先累积整段再压
   await produce({ write(chunk) { count(chunk); collect(chunk); } });
   return { data: deflateSync(concatChunks(chunks, total), { level: 6 }), method: 8, size: fed, crc: crc.digest() };
 }

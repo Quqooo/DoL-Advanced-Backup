@@ -13,7 +13,7 @@ export type BundleErrorCode = 'zip' | 'manifest' | 'entry' | 'json' | 'verify';
  * 读包失败：分类码 + 词条键。
  *
  * `code` 回答「哪一类失败」（调用方与单测按它判），`id`/`params` 回答「给玩家看哪句话」。
- * 两者别合并：同一个分类下的文案会各自带参数（文件名、条数），而分类只有五个。
+ * 两者不合并：同一个分类下的文案会各自带参数（文件名、条数），而分类只有五个。
  */
 export class BundleError extends MessageError {
   constructor(readonly code: BundleErrorCode, id: string, ...params: MessageParam[]) {

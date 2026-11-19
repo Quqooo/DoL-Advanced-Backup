@@ -123,7 +123,7 @@ export interface Strings {
   deletableCount: (count: number) => string;
   /**
    * 软依赖提示：导出与恢复前按类型汇总，参数是该类型的条数。
-   * 只用「标签：数量」的形状，省掉单复数与语序差异。
+   * 只用「标签：数量」的形状，省去单复数与语序差异。
    */
   hintDeltaDowngrade: (count: number) => string;
   hintSideloadMod: (count: number) => string;
@@ -278,7 +278,7 @@ export interface Strings {
   /**
    * 失败文案：键与 `MessageError.id` 同名（`core/error.ts`）。
    * 键在 `core/` / `store/` / `restore/` 里抛出，文案只在这里，界面经 `describeError` 渲染。
-   * 不带参数的条目直接写字符串，省掉一层 `() =>`。
+   * 不带参数的条目直接写字符串，省去一层 `() =>`。
    */
   errors: Record<string, string | ErrorText>;
 }
@@ -998,7 +998,7 @@ const EN: Strings = {
     'session/rcWarn': 'No web storage warning',
   },
   errors: {
-    // Reading a package: structure, fingerprint, index
+    // 读包：结构、指纹、索引
     bundleModpackMeta: 'The ModPack container metadata is damaged',
     bundleModpackInner: name => `The container is missing ${name}`,
     bundleNotZip: 'Not a zip file, or its central directory is damaged',
@@ -1018,7 +1018,7 @@ const EN: Strings = {
     bundleDbIndex: (entries, count) => `The database index has ${entries} entries, more than the ${count} in idb.json`,
     bundleEntryJson: path => `${path} is not valid JSON`,
     restoreEmpty: 'The pack has nothing to restore',
-    // Writing
+    // 写入
     dbMissingStores: stores => `Missing object stores: ${stores}`,
     modVerifyFailed: 'Check failed: size or hash does not match',
     modLoaderRejected: 'ModLoader refused the write',
@@ -1034,11 +1034,11 @@ const EN: Strings = {
     dbReadFailed: name => `Consistent read failed for database ${name}`,
     dbSchemaMismatch: name => `Incompatible stores in database ${name}; no data cleared`,
     blobInvalid: () => 'Invalid data block reference or range',
-    // Split export: limits of the outer multi-volume zip
+    // 分卷导出：外层多卷 zip 的边界
     splitPartSize: () => 'Invalid split size',
     splitTooLarge: () => 'The pack exceeds 4 GiB; split export is not supported',
     splitTooManyParts: count => `Splitting into ${count} parts exceeds the 99-part limit`,
-    // Value codec: every error carries a path so the failing record can be located
+    // 值编解码：错误都带路径，出错时能定位到具体记录
     unsupportedValue: (type, path) => `${type} cannot be backed up losslessly: ${path}`,
     valueTagUnknown: (tag, path) => `Unknown value tag ${tag}: ${path}`,
     valueRefInvalid: (id, path) => `Invalid reference ${id}: ${path}`,
@@ -1054,12 +1054,12 @@ const EN: Strings = {
     legacyWriteFailed: () => 'Legacy save write failed; original values restored',
     legacyRollbackFailed: () => 'Legacy save write and compensation failed; check storage',
     openDbFailed: name => `Could not open database ${name}`,
-    // Row names in the failure list: addresses show as-is, fixed labels come from here
+    // 失败清单里的行名：地址原样显示，固定标签走词条
     labelModOrder: 'Load order',
     labelModHidden: 'Disabled list',
     labelModEnabled: 'Enabled list',
     labelSaveDb: 'Save database',
-    // Snapshots
+    // 快照
     snapshotWriteFailed: 'Could not write the snapshot',
     snapshotWriteAborted: 'Writing the snapshot was aborted',
     snapshotMetaFailed: 'Could not update the snapshot index',
@@ -1069,7 +1069,7 @@ const EN: Strings = {
     snapshotIncomplete: groups => `${groups} data groups could not be read, so no rollback point can be made. Retry the failed groups on the export page, then restore.`,
     snapshotMissing: 'The snapshot is missing or damaged',
     snapshotNoScript: 'The restore script is not readable here, so a ModPack container cannot be built. Install this mod as a mod, then retry.',
-    // Export / restore pack
+    // 导出 / 恢复包
     selfPackUnsupported: 'The pack uses a compression method JSZip does not support, and the original bytes were not found in mod storage',
     importNoSource: 'No package was given to restore',
     importBusy: 'Another restore is already running. Wait for it to finish and try again.',
@@ -1105,7 +1105,7 @@ export function setLangPref(value: LangPref): void {
  */
 export function detectLang(): Lang {
   if (cached) return cached;
-  // 单测在 Node 里跑：没有 document 就按中文，别让词条查询把纯逻辑测试拽下水
+  // 单测在 Node 里跑：没有 document 就按中文，避免词条查询影响纯逻辑测试
   if (typeof document === 'undefined') {
     cached = 'zh';
     return cached;

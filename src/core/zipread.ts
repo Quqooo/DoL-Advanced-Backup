@@ -5,8 +5,8 @@
  * 走不到上层；写端在 `pack/zip.ts`，读端只有这一份。
  *
  * 两条读法共用同一套字段解析：
- * - `listZipEntries` / `readZipEntry` 吃整份字节（打包、单测、boot.json 探测）；
- * - `openZip` 吃 `ZipSource`，只读尾部找中央目录、再按条目切片（恢复大包时不要求整份连续缓冲）。
+ * - `listZipEntries` / `readZipEntry` 接收整份字节（打包、单测、boot.json 探测）；
+ * - `openZip` 接收 `ZipSource`，只读尾部找中央目录、再按条目切片（恢复大包时不要求整份连续缓冲）。
  */
 
 import { crc32 } from './crc32';
@@ -16,7 +16,7 @@ import { CENTRAL_SIZE, EOCD_SIZE, LOCAL_SIZE } from './zipstruct';
 /** 0 = STORE，8 = deflate，93 = zstd（本模组的 ZSTD 档） */
 export type ZipMethod = 0 | 8 | 93;
 
-/** 恢复时要逐个条目定位，解码器跟着走模块级，别每次调用都新建 */
+/** 恢复时要逐个条目定位，解码器因此放在模块级，避免每次调用新建 */
 const textDecoder = new TextDecoder();
 
 export interface ZipListEntry {
@@ -126,7 +126,7 @@ function dataStartOf(head: DataView): number {
  * STORE 条目要复制一份再交出去。
  *
  * `subarray` 是**指向整个包**的视图：把这个视图写进 IndexedDB 时，结构化克隆按
- * 底层 ArrayBuffer 复制，一条 3 KB 的记录会把整个包（这里 246 MB）搬一遍。
+ * 底层 ArrayBuffer 复制，一条 3 KB 的记录会把整个包（这里 246 MB）复制一遍。
  * 实测一个 1 639 条、137 个裸二进制的库要 69 s，全耗在这上面。
  * 复制是 memcpy，整包所有 STORE 条目加起来也只要几十毫秒。
  */
@@ -215,7 +215,7 @@ export interface ZipSource {
   readonly size: number;
   /** 读回 `[start, end)`；返回的缓冲是否独立于源由 `owns` 说明 */
   read(start: number, end: number): Promise<Uint8Array>;
-  /** 读回的分块是否已是新缓冲（Blob 切片就是），据此省掉 STORE 条目的那次复制 */
+  /** 读回的分块是否已是新缓冲（Blob 切片就是），据此省去 STORE 条目的那次复制 */
   readonly owns: boolean;
 }
 

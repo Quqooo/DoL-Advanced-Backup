@@ -49,7 +49,7 @@ export function makeGroupContext(origin: string): GroupContext {
   return { mapping: mappingList(), origin };
 }
 
-/** 安全模式状态：这台机器的启动失败计数与开关，搬到别的机器上可能直接把人锁进安全模式 */
+/** 安全模式状态：这台机器的启动失败计数与开关，迁移到别的机器上可能直接把人锁进安全模式 */
 export const SAFE_MODE_GROUP = 'mods/state/safe';
 
 /** 加密内容模组的解密口令：属于加载器而不是某个模组，换机器时要跟着走 */

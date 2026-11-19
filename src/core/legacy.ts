@@ -7,7 +7,7 @@
 
 /**
  * `null`、空容器都算没有；解析不了或形状不认识按「有」处理——
- * 宁可让可疑数据出现在列表里，也不要悄悄藏掉可能还能救的存档。
+ * 可疑数据应保留在列表里，不隐藏可能仍可恢复的存档。
  */
 export function legacyHasSave(raw: string | null): boolean {
   if (raw === null) return false;

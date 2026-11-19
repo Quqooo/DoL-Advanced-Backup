@@ -232,7 +232,7 @@ function rewriteStores(db: IDBDatabase, stores: readonly DbStoreDump[], clear = 
  * 把一份库导出写回去。
  *
  * `recreate` 只给覆盖与干净恢复用：记录集合要等于包内那一刻。
- * 不删库是因为宿主常常一直开着连接，`deleteDatabase` 会一直挂着，
+ * 不删库是因为宿主常常一直开着连接，`deleteDatabase` 会一直等待，
  * 之后任何 `open` 都排在它后面永不返回；而删库能补的结构（版本、缺的仓、索引）
  * 在已存在的库上本来也改不了。库不存在时才按包内版本与结构建，索引那时才建得出来。
  */
@@ -273,7 +273,7 @@ export async function writeDatabase(dump: DbDump, options: { recreate?: boolean 
  * 不能只看顶层再 `JSON.stringify`：记录里的 `ArrayBuffer` / `Uint8Array` 会被序列化成 `{}`，
  * 于是「音频存放在对象的某个字段上」这类库量出来接近 0，结果不正确。
  *
- * `seen` 挡住循环引用（结构化克隆允许环），深度上限挡住病态嵌套。
+ * `seen` 阻断循环引用（结构化克隆允许环），深度上限阻断病态嵌套。
  */
 export function valueSize(value: unknown, seen: WeakSet<object> = new WeakSet(), depth = 0): number {
   if (value === null || value === undefined) return 4;

@@ -48,7 +48,7 @@ export const SELF_NAME = 'AdvancedBackup';
 export const PREFS_KEY = 'AdvancedBackup:settings';
 
 /**
- * 干净恢复清空过的库名。空壳不在当页删除——`deleteDatabase` 被别的连接占着时会卡在
+ * 干净恢复清空过的库名。空壳不在当页删除——`deleteDatabase` 被别的连接占着时会停在
  * `onblocked`，之后任何 `open` 都排在它后面；重载后由 `app/cleanup.ts` 复查并真正删掉。
  */
 export const PENDING_DROP_KEY = 'AdvancedBackup:pendingDrop';
@@ -77,10 +77,10 @@ export const SELF_RESTORE_WRAP_LIMIT = 120 * 1024 * 1024;
 /**
  * 安卓壳（cordova）下走 `cordova-plugin-save-dialog` 落盘的体积上限。
  *
- * 插件（Gedan fork）的 Java 端把 1 MB 分块全攒进 `ByteArrayOutputStream`，`saveFile` 时
+ * 插件（Gedan fork）的 Java 端把 1 MB 分块全累加进 `ByteArrayOutputStream`，`saveFile` 时
  * 再 `toByteArray()` 复制一份，峰值约为文件的 2 倍；超限抛 `OutOfMemoryError`（Error，
  * 不是 Exception），插件的 `catch (Exception)` 接不住，回调永不 resolve：表现为 SAF 框
- * 正常、文件建成 0 字节、导出无报错地挂死。
+ * 正常、文件建成 0 字节、导出无报错地长时间无响应。
  *
  * 壳没开 largeHeap，默认堆各机型 128–512 MB 不等。按「2F + 运行时 20–40 MB」估算，
  * 128 MB 档的安全上限约 44 MB；取 32 MB 留出余量。超过它改走分卷导出

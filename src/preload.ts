@@ -1,7 +1,7 @@
 /**
  * 引擎启动前把「备份」分页插进存档覆盖层的 `titleSaves` 里。
  *
- * 这样按钮是原版 `<<button>>`，`setupTabs` 建 `Tab` 集合时能一起抓到，
+ * 这样按钮是原版 `<<button>>`，`setupTabs` 建 `Tab` 集合时能一起收集到，
  * 选中态、索引和宽度都由原版管理。
  *
  * 按钮内容只做 `<<toggleTab>>` 加一次脚本调用，**不能**用 `<<replace #customOverlayContent>>`：
@@ -45,7 +45,7 @@ const BUTTON = [
 /**
  * 在 `titleSaves` 的 `#overlayTabs` 结束标签前插入按钮。
  * 存档覆盖层只有「存档」与「导出/导入」两个原版分页，锚点固定；
- * 找不到就原样返回，宁可没有分页也不动坏别的 widget。
+ * 找不到就原样返回：少一个分页可以接受，不能改坏别的 widget。
  */
 function patch(text: string): string {
   if (text.includes(MARK)) return text;

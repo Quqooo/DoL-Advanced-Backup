@@ -59,7 +59,7 @@ export const savesCollector: Collector = {
       collector: 'saves',
       items,
       // 两键合成一条条目，键本身不再单独出现；`save:legacy` 有无也由本采集器决定，
-      // 兜底枚举不得再补一条
+      // 回退枚举不得再补一条
       claims: [lsAddr(LEGACY_SAVES_KEY), lsAddr(LEGACY_DETAILS_KEY), LEGACY_SAVE_ADDR],
     };
   },

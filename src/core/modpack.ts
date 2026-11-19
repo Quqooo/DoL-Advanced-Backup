@@ -4,13 +4,13 @@ import { createMemorySink, type ByteSink } from './sink';
 import { createXxh64 } from './xxhash';
 
 /**
- * ModLoader 的 ModPack 容器（2.60.0+ 首次支持，2.60.0 与最新版格式一致，仅常量搬家重构）。
+ * ModLoader 的 ModPack 容器（2.60.0 起支持；各版本格式一致，后续只有常量位置调整一类的重构）。
  *
  * 布局：`JeremieModLoader` 魔数补齐到 64 字节 → 三个小端 uint64（元数据起点、终点、文件数据起点）
  * → BSON(元数据) → 文件块 → BSON(文件树) → 末尾 8 字节 xxHash64。
  *
- * 我们只需要「这个模组叫什么、什么版本」，所以只解元数据那段 BSON；
- * 文件数据在加密模式下是密文，不去碰它——包内容原样搬，恢复时交给 ModLoader。
+ * 这里只需要「这个模组叫什么、什么版本」，所以只解元数据那段 BSON；
+ * 文件数据在加密模式下是密文，不去碰它——包内容原样保留，恢复时交给 ModLoader。
  *
  * 写入口（`writeModPack`）是同一布局的逆过程：超大自恢复包要套这层壳才能被
  * ModLoader 装入。2.60 起加载器对大体积 Uint8Array 模组计算哈希时先转成字符串，
@@ -304,7 +304,7 @@ export function readModPackEntry(bytes: Uint8Array, name: string): Uint8Array | 
   return bytes.slice(from, to);
 }
 
-// libsodium 的 from_base64 默认变体不吃 `=` padding，ModLoader 写端（to_base64）也不带
+// libsodium 的 from_base64 默认变体不接受 `=` padding，ModLoader 写端（to_base64）也不带
 const MAGIC_B64 = 'SmVyZW1pZU1vZExvYWRlcg';
 
 /** 路径列表 → 嵌套文件树（叶子上 `_f_` 标记），与 ModLoader 写端同构 */

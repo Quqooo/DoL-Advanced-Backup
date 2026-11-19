@@ -25,8 +25,8 @@ function cordovaSave(): ((blob: Blob, filename: string) => unknown) | null {
 }
 
 /**
- * 安卓壳的保存插件把整份文件攒在 Java 堆里（见 constants.ts 的 ANDROID_SAVE_LIMIT），
- * 超限不会报错而是无提示挂死。此时压缩已经完成，给三个选择：分卷、整包、取消。
+ * 安卓壳的保存插件把整份文件累积在 Java 堆里（见 constants.ts 的 ANDROID_SAVE_LIMIT），
+ * 超限不会报错，而是无提示地长时间无响应。此时压缩已经完成，给三个选择：分卷、整包、取消。
  */
 type OversizeChoice = 'split' | 'whole' | 'cancel';
 
@@ -83,12 +83,12 @@ export interface SaveSink {
   method: SaveMethod;
   /** 流式写入：大包走这条路径，字节不合并成整包缓冲 */
   stream(): SaveStream;
-  /** 一次性写：小文件与已经攒好的字节（快照导出）够用 */
+  /** 一次性写：小文件与已经准备好的字节（快照导出）够用 */
   write(blob: Blob, filename?: string): Promise<void>;
 }
 
 /**
- * 攒成分块再一次性交出去：下载链接与安卓插件都只收 Blob，没得选。
+ * 累积分块再一次性交出去：下载链接与安卓插件都只收 Blob，没得选。
  * 分块由 Blob 管理，比先拼一条 250 MB 的 ArrayBuffer 少一次整包复制。
  */
 function blobStream(deliver: (blob: Blob, filename?: string) => Promise<void>): SaveStream {
@@ -142,7 +142,7 @@ function fileStream(handle: any): SaveStream {
  *
  * `showSaveFilePicker` 要求用户手势：一次全量导出要几十秒，等压缩完再打开选择器，
  * 手势早已过期，浏览器直接拒绝，于是退回下载链接——表现就是「小文件弹选择框、
- * 大文件变成下载」。所以选择器要在点击的同一拍里打开，句柄先留着，压缩完再写。
+ * 大文件变成下载」。所以选择器要在点击的同一次回调里打开，句柄先留着，压缩完再写。
  *
  * 用户在选择器里取消时抛 AbortError，调用方按「取消」处理（此时还没开始压缩）。
  */

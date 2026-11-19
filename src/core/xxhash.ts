@@ -21,7 +21,7 @@ let ready: Promise<XXHashAPI> | null = null;
 /**
  * 取 wasm 实例。实例化约 1–2 ms，只做一次；失败后同一个错误会一直返回。
  *
- * 失败原因（浏览器禁用 WebAssembly、被 CSP 挡住）对玩家只有一句有用的结论：
+ * 失败原因（浏览器禁用 WebAssembly、被 CSP 拦截）对玩家只有一句有用的结论：
  * 这个包写不出来。原始错误打到控制台，便于区分是哪一种。
  */
 function load(): Promise<XXHashAPI> {
@@ -32,7 +32,7 @@ function load(): Promise<XXHashAPI> {
   return ready;
 }
 
-/** 增量哈希：容器边写边算，不必先把整包攒出来再一次性过 wasm */
+/** 增量哈希：容器边写边算，不必先把整包累积出来再一次性过 wasm */
 export interface Xxh64 {
   update(chunk: Uint8Array): void;
   digest(): bigint;

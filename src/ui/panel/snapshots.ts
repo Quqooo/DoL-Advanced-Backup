@@ -89,7 +89,7 @@ export function createSnapshotPane(deps: SnapshotPaneDeps): { el: HTMLElement; r
   create.dataset.advbkSnapshotNew = '1';
 
   /**
-   * 有任务在跑就锁住整页：行内按钮与底部按钮一起锁，别让恢复和删除同时落到同一份快照上。
+   * 有任务在跑就锁住整页：行内按钮与底部按钮一起锁，避免恢复与删除同时作用在同一份快照上。
    * 锁是三个分页共用的，导出或恢复在跑时这一页同样跟着锁。
    */
   const syncLocked = (): void => {
@@ -156,7 +156,7 @@ export function createSnapshotPane(deps: SnapshotPaneDeps): { el: HTMLElement; r
     if (!release) return;
     try {
       if (kind === 'export') {
-        // 超过阈值先问一句要不要套容器：meta.bytes 就能判断，不必先搬出整份快照；
+        // 超过阈值先问一句要不要套容器：meta.bytes 就能判断，不必先读出整份快照；
         // 问完再进导出，确认点击是新手势，保存选择器照常能开
         const wrap = meta.bytes > SELF_RESTORE_WRAP_LIMIT
           ? await confirmDialog({

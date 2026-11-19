@@ -123,7 +123,7 @@ async function exclusiveImport<T>(task: () => Promise<T>): Promise<T> {
   }
 }
 
-/** 从已经打开好的包恢复：导出包里内嵌的恢复脚本用这条，省掉重新序列化 zip */
+/** 从已经打开好的包恢复：导出包里内嵌的恢复脚本用这条，省去重新序列化 zip */
 export async function importBundle(request: ImportBundleRequest): Promise<ImportResult> {
   return exclusiveImport(() => runImport(request.bundle, request));
 }
@@ -242,7 +242,7 @@ async function runImport(bundle: Bundle, request: Omit<ImportRequest, 'source' |
   };
 }
 
-/** e2e 与排查用：base64 直传，省掉文件选择器 */
+/** e2e 与排查用：base64 直传，省去文件选择器 */
 export async function importBase64(base64: string, mode?: RestoreMode): Promise<ImportResult> {
   return importPackage({ source: base64ToBytes(base64), ...(mode ? { mode } : {}) });
 }

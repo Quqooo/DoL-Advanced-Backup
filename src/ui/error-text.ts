@@ -29,7 +29,7 @@ export function describeError(error: unknown, strings: Strings = t()): string {
   if (!message) return messageOf(error);
   const render = strings.errors[message.id];
   if (!render) return message.id;
-  // 不带参数的条目直接是字符串，省掉字典里的 `() =>`
+  // 不带参数的条目直接是字符串，省去字典里的 `() =>`
   if (typeof render === 'string') return render;
   // 参数里的异常是嵌套消息（「自动快照失败：<内层原因>」），展开一层再交出去
   return render(...message.params.map(param => (param instanceof Error ? describeError(param, strings) : param)));

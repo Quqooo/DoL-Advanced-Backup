@@ -78,7 +78,7 @@ export function detailTime(record: { data?: unknown } | undefined): number {
 
 /**
  * 槽位与 details 成对写。
- * `details.idx` 是存档时的段落计数（`State.qc`），读档会写回 `state.idx`，必须原样搬，不能按日期重算。
+ * `details.idx` 是存档时的段落计数（`State.qc`），读档会写回 `state.idx`，必须原样保留，不能按日期重算。
  */
 export async function writeSaves(saves: readonly SaveRecord[], details: readonly DetailRecord[], missing = false): Promise<Set<number>> {
   const db = await ensureDb(gameDb, 1, [
@@ -135,7 +135,7 @@ function saveTransaction(
   });
 }
 
-/** 两键写失败尽力补偿；localStorage 不提供崩溃原子性。 */
+/** 两键写失败尽力补偿；localStorage 没有事务，无法原子写入。 */
 export function writeLegacy(
   legacy: { saves: string | null; details: string | null },
   options: { removeMissingDetails?: boolean } = {},

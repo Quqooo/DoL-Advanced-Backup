@@ -188,7 +188,7 @@ export async function listAddrs(): Promise<AddrInfo[]> {
     });
   }
   const legacy = readLegacy();
-  // 与采集器同一条判据：只有列表元信息的空壳不算一份存档，别让兜底路径把它重新列出来
+  // 与采集器同一条判据：只有列表元信息的空壳不算一份存档，回退路径不应把它重新列出
   if (legacyHasSave(legacy.saves)) {
     out.push({
       addr: LEGACY_SAVE_ADDR,
@@ -197,7 +197,7 @@ export async function listAddrs(): Promise<AddrInfo[]> {
     });
   }
 
-  // 下面几段都可能因宿主接口抛错而整段失败：枚举结果是保底数据来源，
+  // 下面几段都可能因宿主接口抛错而整段失败：枚举结果是回退数据来源，
   // 取不到时只是少几项，不应让一个出错的库清空整棵树。
   await attempt(async () => {
     const [saves, details] = await Promise.all([readSaves(), readDetails()]);

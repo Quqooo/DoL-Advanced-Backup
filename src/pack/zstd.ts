@@ -14,7 +14,7 @@ import wasmBase64 from 'virtual:zstd-wasm';
 
 let ready: Promise<void> | null = null;
 
-/** 类型声明只写了 string，但实现里 `byteLength > 0` 就按字节实例化——我们只走这条路 */
+/** 类型声明只写了 string，但实现里 `byteLength > 0` 就按字节实例化——这里只走这条路 */
 const boot = init as unknown as (input: Uint8Array) => Promise<void>;
 
 function ensure(): Promise<void> {

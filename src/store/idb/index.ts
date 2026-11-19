@@ -187,7 +187,7 @@ export function abortQuietly(tx: IDBTransaction): void {
 /**
  * 一个 readwrite 事务：`fill` 里只管把操作排进队列，提交与回滚在这里统一收尾。
  *
- * 事务的三种结束态必须都接住，漏一个就会挂住整条恢复流程；`action` 只用于错误文案。
+ * 事务的三种结束态必须都接住，漏一个就会让整条恢复流程一直等待；`action` 只用于错误文案。
  * `fill` 同步抛错时必须主动 `abort`：异常不会让事务结束，已排入的写请求仍会提交，
  * 于是「报告失败、数据已被改掉」。值的键与仓库的 keyPath 不符就是这条路径。
  */
@@ -239,8 +239,8 @@ export function deleteByKeys(db: IDBDatabase, store: string, keys: readonly IDBV
 }
 
 /**
- * 删库要等所有连接关闭，`onblocked` 会一直挂着。
- * 启动清理不能卡在这里：阻塞按失败返回，请求仍留在浏览器里，由调用方决定是否重试。
+ * 删库要等所有连接关闭，`onblocked` 会一直等待。
+ * 启动清理不能停在这里：阻塞按失败返回，请求仍留在浏览器里，由调用方决定是否重试。
  */
 export function deleteDatabase(name: string): Promise<boolean> {
   return new Promise(resolve => {
@@ -259,7 +259,7 @@ export function deleteDatabase(name: string): Promise<boolean> {
  * 清空一个库的全部仓库，返回清掉的记录数。
  *
  * 删条目与覆盖写入是同一条规则——「记录集合等于包内那一刻」，包里没有这个库时集合就是空。
- * 不删库：`deleteDatabase` 被别的连接占着时会卡在 `onblocked`，请求一直挂着，
+ * 不删库：`deleteDatabase` 被别的连接占着时会停在 `onblocked`，请求一直等待，
  * 之后任何 `open` 都排在它后面。保留库本身，清空全部记录。
  */
 export async function clearDatabase(name: string): Promise<number> {

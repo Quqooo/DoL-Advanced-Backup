@@ -29,7 +29,7 @@ const WORLD_KEYS = new Set<string>(PROGRESS_WORLD);
 /**
  * 三种档都不勾的分组：能从模组包重建的缓存，与会话内的临时标记。
  *
- * 缓存搬过去只是把旧解析结果带进新机器；热重载标记里存着完整存档，跟包走没有意义。
+ * 缓存迁移过去只是把旧解析结果带进新机器；热重载标记里存着完整存档，跟包走没有意义。
  */
 const NEVER_GROUPS = new Set<string>([IMAGE_CACHE_GROUP, NEO_CACHE_GROUP, NEO_HOT_RELOAD_GROUP]);
 
@@ -48,9 +48,9 @@ export function selects(preset: NamedPreset, item: Item): boolean {
   const category = categoryOfGroup(item.group);
   // 界面分页只是「上次停在哪一页」的视图状态，换机器没有意义，只留给全量档
   if (item.group === NEO_TAB_GROUP) return false;
-  // 安全模式状态是这台机器的运行状态（失败计数、强制/自动开关），搬过去可能直接把对面锁进安全模式
+  // 安全模式状态是这台机器的运行状态（失败计数、强制/自动开关），迁移过去可能直接把对面锁进安全模式
   if (item.group === SAFE_MODE_GROUP) return false;
-  // 模组档只搬模组与列表：Neo 的界面偏好不是模组本身
+  // 模组档只迁移模组与列表：Neo 的界面偏好不是模组本身
   if (preset === 'mods' && item.group.startsWith(`${NEO_GROUP}/`)) return false;
   if (preset === 'mods') return category === 'mods';
 
@@ -64,7 +64,7 @@ export function selects(preset: NamedPreset, item: Item): boolean {
     case 'settings':
     case 'mods':
       return true;
-    // 会话存储只勾快照：另外三个是会话内的一次性开关，搬过去只会改变对方的启动行为
+    // 会话存储只勾快照：另外三个是会话内的一次性开关，迁移过去只会改变对方的启动行为
     case 'session':
       return item.group === SESSION_SNAPSHOT_GROUP;
     default:

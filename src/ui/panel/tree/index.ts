@@ -158,7 +158,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
   let sweepTimer = 0;
   /** 扫光开始时刻：收尾时按它计算本轮剩余时间，等这一轮走完再移除 */
   let sweepStartedAt = 0;
-  /** 条目是否已经交齐：分批加载时集合不全会把「全量」误判成当前档，先别据此改档 */
+  /** 条目是否已经交齐：分批加载时集合不全会把「全量」误判成当前档，不应据此改档 */
   let settled = false;
   /** 清空前勾着的地址：自定义档重扫时按它把勾选接回来 */
   let carry: Set<string> | null = null;
@@ -256,7 +256,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
     // 扫光盖在整块区域上：一条属性控制，几百行也只多一层合成层
     syncSweep();
     for (const [addr, row] of rows) {
-      // 上锁的条目任何路径都不该被选中：预设、分组全选、残留的自定义勾选都在这里兜住
+      // 上锁的条目任何路径都不该被选中：预设、分组全选、残留的自定义勾选都在这里统一拦截
       const reason = lockOf(row.item);
       if (reason) selection.delete(addr);
       row.input.checked = selection.has(addr);
@@ -608,7 +608,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
     clear(preset) {
       // 换来源：按指定档位重选；没指定就沿用清空前那一档，手改过则按原勾选接回来
       intent = preset ?? shown;
-      // 连点两次重扫时第二批已经是空的，别把第一批记下的勾选冲掉
+      // 连点两次重扫时第二批已经是空的，不要清除第一批记下的勾选
       carry = carry ?? new Set(selection);
       items = [];
       selection = new Set();

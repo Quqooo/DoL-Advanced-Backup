@@ -71,7 +71,7 @@ export function saveAddr(slot: number): string {
   return `save:idb/${slot}`;
 }
 
-/** 旧式存档两键：缺一个游戏就分不清引擎，只能整体搬 */
+/** 旧式存档两键：缺一个游戏就分不清引擎，只能整体迁移 */
 export const LEGACY_SAVE_ADDR = 'save:legacy';
 
 export const MOD_ORDER_ADDR = 'modlist:order';

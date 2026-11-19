@@ -35,7 +35,7 @@ export function snapshotAddrs(items: readonly Item[]): Set<string> {
   );
 }
 
-/** 写入前至少还要留出这么多，别把配额吃到 0 把游戏存档挤掉 */
+/** 写入前至少还要留出这么多，避免占满配额后挤掉游戏存档 */
 const MIN_FREE = 1024 * 1024;
 
 export interface SnapshotDraft {

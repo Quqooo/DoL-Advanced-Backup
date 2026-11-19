@@ -33,7 +33,7 @@ const CRC_TABLES = (() => {
   return tables;
 })();
 
-/** 增量 CRC：边序列化边算，不必先把整段字节攒出来 */
+/** 增量 CRC：边序列化边算，不必先把整段字节累积出来 */
 export interface Crc32 {
   update(chunk: Uint8Array): void;
   digest(): number;

@@ -32,7 +32,7 @@ export const otherCollector: Collector = {
       }
 
       // 模组采集器失败时，本模组自己的包也会落到这里；补上 self 标记，
-      // 「保留本模组」才不会在兜底路径上失效
+      // 「保留本模组」才不会在回退路径上失效
       const self = scheme === 'mod' ? selfEntry() : null;
       const storedName = self ? nameOfAddr(info.addr) : null;
       const flags = self && storedName !== null && matches(self.mod, storedName) ? { self: true as const } : undefined;

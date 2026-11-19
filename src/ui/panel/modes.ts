@@ -15,7 +15,7 @@ export const MODE_TEXT: Record<RestoreMode, () => string> = {
   clean: () => t().modeClean,
 };
 
-/** 说明句的前缀就是按钮上的那个词，所以四句一起改，别在代码里拼 */
+/** 说明句的前缀就是按钮上的那个词，所以四句一起改，不在代码里拼接 */
 export const MODE_NOTE: Record<RestoreMode, () => string> = {
   merge: () => t().modeNoteMerge,
   overwrite: () => t().modeNoteOverwrite,

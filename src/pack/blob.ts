@@ -145,7 +145,7 @@ class PackedStore {
     this.bytes = offset;
   }
 
-  /** 拼成一条缓冲：只在写包时调用一次，拼完原始分块立刻松手 */
+  /** 拼成一条缓冲：只在写包时调用一次，拼完原始分块立刻释放 */
   concat(): Uint8Array {
     if (this.merged) return this.merged;
     if (this.chunks.length === 1) {
@@ -159,7 +159,8 @@ class PackedStore {
       const chunk = this.chunks[index];
       out.set(chunk, at);
       at += chunk.length;
-      // 逐块清引用：拼接期间原始分块可以回收，峰值不至于翻倍
+      // 逐块清引用：复制完一块即可回收一块，拼接结束后只剩 out 一份。
+      // 峰值仍在分配瞬间——存活字节 × 2；回收死亡区间后这个基数随之变小
       this.chunks[index] = EMPTY;
     }
     this.chunks = [];

@@ -329,7 +329,7 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
       error => {
         if (mine !== generation) return;
         scanning = false;
-        // 这一轮没扫出来：上一轮的树留着，别把用户看得见的东西一起清掉
+        // 这一轮没扫出来：上一轮的树留着，不把用户可见的内容一起清除
         tree.settle();
         note.textContent = describeError(error);
         noteRow.dataset.advbkScan = 'error';
@@ -351,7 +351,7 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
       notices.show('warn', t().nothingSelected);
       return;
     }
-    // 按钮在别的任务跑时已是禁用态，这里再挡一次：键盘与脚本触发不经过鼠标
+    // 按钮在别的任务跑时已是禁用态，这里再拦截一次：键盘与脚本触发不经过鼠标
     const release = gate.take('export');
     if (!release) return;
     notices.clear();

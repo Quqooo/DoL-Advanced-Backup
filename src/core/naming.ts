@@ -19,7 +19,7 @@ export function shortHash(sha256: string): string {
  */
 export function modFileName(name: string | undefined, sha256: string, ext = '.zip'): string {
   if (!name || !name.trim()) return `unknown-${shortHash(sha256)}${ext}`;
-  // 存储名本身常带 .zip / .modpack，别拼成 x.zip.zip
+  // 存储名本身常带 .zip / .modpack，避免拼成 x.zip.zip
   return `${sanitizeName(name.replace(/\.(modpack|zip)$/i, ''))}${ext}`;
 }
 

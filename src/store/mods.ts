@@ -180,7 +180,7 @@ export function prefersBinary(type: ModValueType, loaderVersion: string): boolea
   if (!loaderVersion) return false;
   const major = Number.parseInt(loaderVersion.split('.')[0] ?? '', 10);
   const minor = Number.parseInt(loaderVersion.split('.')[1] ?? '', 10);
-  // 非 2.x：1.x（更老）按 base64；3.x 以后按二进制。NaN 落到 false
+  // 非 2.x：1.x（更老）按 base64；3.x 以后按二进制。NaN 视为 false
   if (major !== 2) return major > 2;
   return minor >= 60;
 }

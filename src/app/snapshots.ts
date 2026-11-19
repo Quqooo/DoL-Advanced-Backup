@@ -83,7 +83,7 @@ export async function snapshotSource(id: number): Promise<Uint8Array | Blob | nu
   return loaded?.payload ?? null;
 }
 
-/** e2e 与排查用：快照 payload 直接给 base64，省掉落盘 */
+/** e2e 与排查用：快照 payload 直接给 base64，省去落盘 */
 export async function snapshotBase64(id: number): Promise<{ name: string; base64: string } | null> {
   const loaded = await loadSnapshot(id);
   if (!loaded) return null;
@@ -101,7 +101,7 @@ export async function snapshotRestore(
   return importPackage({ source: loaded.payload, mode, ...(onProgress ? { onProgress } : {}) });
 }
 
-/** 搬 payload 的块大小：够大（省调用开销），又不至于让 Blob 分块太碎 */
+/** 传输 payload 的块大小：够大（省调用开销），又不至于让 Blob 分块太碎 */
 const PAYLOAD_CHUNK = 4 * 1024 * 1024;
 
 /** 把快照本体按块交给落点：payload 可能是 Blob，展开成整包字节会多占一份 */
@@ -124,9 +124,9 @@ export async function snapshotExport(
   id: number,
   opts: { wrap?: boolean } = {},
 ): Promise<{ name: string; bytes: number; method: SaveMethod }> {
-  // 先读元信息、先定落盘句柄，再去搬字节：快照是全量 STORE，读几十 MB 要好几秒，
-  // 等搬完再打开选择器，用户手势已经过期，会静默退回下载链接。
-  // 「要不要包装」由面板在进这里之前问完（meta.bytes 就够判断，不必先搬字节），
+  // 先读元信息、先定落盘句柄，再去读取字节：快照是全量 STORE，读几十 MB 要好几秒，
+  // 等读完再打开选择器，用户手势已经过期，会静默退回下载链接。
+  // 「要不要包装」由面板在进这里之前问完（meta.bytes 就够判断，不必先读字节），
   // 确认按钮本身就是新手势，选择器可以放心开。
   const meta = await getSnapshotMeta(id);
   if (!meta) throw messageError('snapshotMissing');

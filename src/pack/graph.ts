@@ -217,7 +217,7 @@ export function useSparseForm(length: number, present: number): boolean {
  * 编码结果的对象节点数预算。
  *
  * `countRefs` 只数不同对象，而恢复侧的 `validate` / `decode` 数的是编码后的 JSON 节点：
- * 一个 `NaN`、`undefined`、`-0` 都会变成标记对象。两边口径不同时会出现「导出成功、
+ * 一个 `NaN`、`undefined`、`-0` 都会变成标记对象。两边计算方式不同时会出现「导出成功、
  * 恢复在写入前中止」。这里按编码结果数一遍，把失败挪到导出阶段。
  *
  * 比 `validate` 略宽（不理解类型标记，见对象就数），只会更早拒绝，不会放过。

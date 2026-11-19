@@ -125,9 +125,7 @@ async function applyLists(state: ApplyState, env: ModEnv): Promise<void> {
   const hiddenAfter = hiddenPlan?.target ?? [...localLists.hidden];
   const disabled = new Set(hiddenAfter);
 
-  // 列表在覆盖与干净下完全按包内那份写入：这两个模式同时会卸载本机独有的包
-  // （`mods/external` 在删除范围里），移除名字不会留下孤立字节。
-  // 合并与补缺取并集：本机顺序在前，包内多出的名字追加在后面。
+  // 覆盖与干净按包内那份替换，合并与补缺以本机顺序为基准（见 `listTarget`）。
   // 没勾顺序列表时沿用本机那份，但仍要按重载后生效的禁用列表过滤。
   const packedOrder = section?.order;
   const orderPicked = Boolean(packedOrder && orderItem && state.selected.has(MOD_ORDER_ADDR));
@@ -159,8 +157,7 @@ async function applyLists(state: ApplyState, env: ModEnv): Promise<void> {
     } catch (error) {
       fail(state.report, 'mods', messageError('labelModHidden'), error);
     }
-    // 只恢复禁用列表时，新禁用的名字必须同时离开启用列表：宿主只看启用列表，
-    // 两份都含同一个名字等于没禁用。勾了顺序列表时上面已经按 hiddenAfter 写过。
+    // 只恢复禁用列表时也要收紧启用列表：宿主只看启用列表（见 `withoutDisabled`）。
     // 禁用列表写入成功后才调整启用列表，避免写入失败时改变模组状态。
     // 包内没有顺序列表（`order: null`）时也要收紧：那个名字本机可能正在启用。
     if (hiddenWritten && !orderWritten && !sameList(enabled, localLists.enabled)) {

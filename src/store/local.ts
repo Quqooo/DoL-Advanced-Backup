@@ -41,7 +41,7 @@ export function readKey(key: string, kind: Kind = 'local'): string | null {
 
 export function writeKey(key: string, value: string, kind: Kind = 'local'): boolean {
   const area = storage(kind);
-  // 拿不到存储（被策略挡住或隐私模式）时不能报成功：调用方按返回值决定要不要记失败
+  // 拿不到存储（被策略拦截或隐私模式）时不能报成功：调用方按返回值决定要不要记失败
   if (!area) return false;
   try {
     area.setItem(key, value);

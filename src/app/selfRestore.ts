@@ -130,7 +130,7 @@ export function applyRestorePack(
   mode: RestoreMode,
   onProgress?: (progress: Progress) => void,
 ): Promise<ImportResult> {
-  // 恢复包是个一次性的壳：包里那份正本正是要装上去的东西，不能按「别覆盖自己」跳过。
+  // 恢复包是个一次性的壳：包里那份正本正是要装上去的东西，不能按「不覆盖自己」跳过。
   // keepSelf 也置假：它的语义是「把这台机器变成包里的样子」，干净 / 覆盖下本模组自己的包与数据
   // 照删——否则正本装上了，本机那份旧数据还留着，状态两边各一半。
   return importBundle({

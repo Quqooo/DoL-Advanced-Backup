@@ -200,7 +200,7 @@ export function encodeValue(value: unknown, blobs: BlobTable, source: string): E
   const counts = countRefs(value, source);
   const ctx: Context = { counts, ids: new WeakMap(), nextId: 0 };
   const encoded = encodeNode(value, blobs, ctx, source, 0);
-  // 编码结果的对象数要与恢复侧同口径：不一致时会出现「导出成功、恢复在写入前中止」
+  // 编码结果的对象数要与恢复侧使用同一计算方式：不一致时会出现「导出成功、恢复在写入前中止」
   if (isThenable(encoded)) {
     return encoded.then(result => {
       assertEncodedBudget(result, source);
@@ -395,7 +395,7 @@ function encodeNode(value: unknown, blobs: BlobTable, ctx: Context, path: string
       const array = value as unknown[];
       const length = array.length;
       if (length > MAX_SPARSE_LENGTH) throw messageError('valueShapeInvalid', path);
-      // 稀疏形态只对长数组有意义；短数组直接按索引走，省掉一次 Object.keys 与排序
+      // 稀疏形态只对长数组有意义；短数组直接按索引走，省去一次 Object.keys 与排序
       if (length > SPARSE_MIN_LENGTH) {
         const present = presentIndices(array);
         if (useSparseForm(length, present.length)) {

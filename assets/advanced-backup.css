@@ -491,7 +491,7 @@
 	cursor: pointer;
 }
 
-/* 8px 短横线接到上级引用线上，归属一眼可见 */
+/* 8px 短横线接到上级引用线上，归属直接可见 */
 .advbk-group-content > .advbk-node > .advbk-leaf::before,
 .advbk-group-content > .advbk-leaf::before {
 	position: absolute;
@@ -551,7 +551,7 @@
 	color: #d98d87;
 }
 
-/* 来源标签与名称之间留一口气，否则 [IDB]AdvancedBackup 会粘在一起 */
+/* 来源标签与名称之间留出间隙，否则 [IDB]AdvancedBackup 会连在一起 */
 .advbk-leaf-line {
 	gap: 6px;
 	align-items: center;
@@ -580,7 +580,7 @@
 
 .advbk-badge {
 	flex: none;
-	/* 贴在行尾、体积列之前 */
+	/* 位于行尾、体积列之前 */
 	margin-left: auto;
 	padding: 0 4px;
 	border: 1px solid var(--advbk-border);

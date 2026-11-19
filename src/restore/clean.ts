@@ -40,11 +40,11 @@ async function removeItem(item: Item): Promise<DeleteResult> {
 }
 
 /**
- * 清空的库名进待删标记：库壳在当页不删，`deleteDatabase` 被别的连接占着时会卡在
+ * 清空的库名进待删标记：库壳在当页不删，`deleteDatabase` 被别的连接占着时会停在
  * `onblocked`，之后任何 `open` 都排在它后面。重载后由 `app/cleanup.ts` 复查再删。
  *
  * 记的是「将要清空」而不是「已经清空」：删除失败时库里的记录还在，那一步由重载后的
- * 记录数复查兜住；反过来漏记就再也没有第二次机会。
+ * 记录数复查覆盖；反过来漏记就再也没有第二次机会。
  */
 function pendingDbOf(item: Item): string | null {
   if (schemeOf(item.addr) !== 'idb') return null;
