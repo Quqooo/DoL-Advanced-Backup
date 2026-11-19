@@ -5,10 +5,13 @@ export const MANIFEST_APP = 'AdvancedBackup';
 /**
  * 包格式号。
  *
- * 写 2、读 1..2：v1 包里的值编码是有损的旧写法，必须继续能读；v2 包被旧版本拒绝。
+ * 写 3、读 1..3：v1 包里的值编码是有损的旧写法，必须继续能读；更新版本的包一律拒绝。
  * 旧模组（dol-data-sync）的包 `format` 也是 1，靠 `app` 挡掉。
+ *
+ * v3 把整库从单条 `idb.json` 拆成每个库一条 `idb/<n>.json`：恢复时按需读一个库，
+ * 勾掉整库或只恢复存档时不再解压上百 MB；导出也逐库压缩进包。
  */
-export const FORMAT_WRITE = 2;
+export const FORMAT_WRITE = 3;
 export const FORMAT_MIN_READ = 1;
 
 export interface ManifestOptions {
@@ -26,16 +29,23 @@ export interface ManifestOptions {
 }
 
 export interface ManifestSection {
+  /** `keys` / `saves` / `idb` / `mods`；整库每个库一条，`id` 都相同 */
   id: string;
   file: string;
+  /**
+   * 条目数：整库的一个库算一条（与 v2 把库数记在 `entries` 上一致），
+   * 存档是槽数 + 详情 + 旧式存档，其余是各自的条数。
+   */
   entries: number;
   bytes: number;
   /** 未压缩数据的 CRC32（8 位小写十六进制）：与中央目录对照，不解压就能验完整性 */
   crc32: string;
   /** 存档分区：实际写入的槽数；老包没有这个字段，索引只能按上界校验 */
   slots?: number;
-  /** 整库分区：实际写入的库数（导出途中消失的库不进索引） */
+  /** v2 及更早：整库只有一条分区，这里是实际写入的库数 */
   dbs?: number;
+  /** v3 起：这一条分区是哪个库（`file` 是 `idb/<n>.json`） */
+  db?: string;
 }
 
 export interface ManifestModItem {
@@ -76,7 +86,7 @@ export interface ManifestBlob {
 /**
  * 建树用的条目索引：四个分区 JSON 的「目录」，随 manifest 一起进包。
  *
- * 恢复页只解压 manifest 与 mods.json 就能把树种出来，不必等 `idb.json` 那类
+ * 恢复页只解压 manifest 与 mods.json 就能把树种出来，不必等整库那类
  * 上百 MB 的分区解完。索引只放树上要显示的东西：名字、槽号、时间、字节数。
  * 结构变化由 `format` 统一标识，索引本身不带版本号。
  */
@@ -107,7 +117,7 @@ export interface IndexSave {
 
 export interface IndexDb {
   name: string;
-  /** 整库记录编码后的总字节数 */
+  /** 这个库编码后的字节数（v3 是 `idb/<n>.json` 的未压缩长度） */
   b: number;
 }
 
@@ -138,6 +148,21 @@ export type ManifestError = 'app' | 'format' | 'newer' | 'shape';
 /** 分区条目总数：导出回执与快照索引都按这一种算法报数 */
 export function entriesOf(manifest: Pick<Manifest, 'sections'>): number {
   return manifest.sections.reduce((sum, section) => sum + section.entries, 0);
+}
+
+/**
+ * 每个库的分区文件。
+ *
+ * v3 起一个库一条 `idb/<n>.json`，库名与文件的对应只在清单里；
+ * v1/v2 是单条 `idb.json`（按库切片读），这里返回空表。
+ */
+export function dbFilesOf(manifest: Pick<Manifest, 'format' | 'sections'>): Map<string, string> {
+  const files = new Map<string, string>();
+  if (manifest.format < 3) return files;
+  for (const section of manifest.sections) {
+    if (section.id === 'idb' && section.db !== undefined) files.set(section.db, section.file);
+  }
+  return files;
 }
 
 export type ParseResult = { ok: true; manifest: Manifest } | { ok: false; error: ManifestError };
@@ -212,6 +237,9 @@ export function parseManifest(raw: unknown): ParseResult {
     }
     if (section.slots !== undefined && !isCount(section.slots)) return { ok: false, error: 'shape' };
     if (section.dbs !== undefined && !isCount(section.dbs)) return { ok: false, error: 'shape' };
+    if (section.db !== undefined && typeof section.db !== 'string') return { ok: false, error: 'shape' };
+    // v3 起整库一库一条：缺了 `db` 就不知道这条分区属于哪个库
+    if (format >= 3 && section.id === 'idb' && typeof section.db !== 'string') return { ok: false, error: 'shape' };
   }
   for (const item of raw.mods.items) {
     if (!isRecord(item) || typeof item.file !== 'string' || typeof item.sha256 !== 'string') {

@@ -66,7 +66,7 @@ async function validatePayloads(plan: RestorePlan, selected: ReadonlySet<string>
       }
     } else if (item.kind === 'idb') {
       sectionOf ??= await openDbSections(plan);
-      const db = sectionOf(nameOfAddr(addr) ?? '');
+      const db = await sectionOf(nameOfAddr(addr) ?? '');
       await loadRefs(db);
       // 每条独立校验，不构造整库解码对象图。
       for (const store of db.stores) for (const record of store.records) {

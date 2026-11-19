@@ -9,6 +9,7 @@ import {
 import { messageError } from '../../core/error';
 import { categoryOfGroup } from '../../core/item';
 import { parseJson, stringifyJson } from '../../core/json';
+import { dbFilesOf } from '../../core/manifest';
 import { findValueStart, jsonRange, splitElements, textOf, type JsonRange } from '../../core/jsonscan';
 import type { RestoreMode } from '../../core/types';
 import { createDecoder } from '../../pack/decode';
@@ -125,18 +126,40 @@ async function openIdbSource(bundle: RestorePlan['bundle']): Promise<IdbSource |
   return { bytes, ranges: splitElements(bytes, { start: dbsStart, end: bytes.length }) };
 }
 
-/** 预检与写入共用切片入口，结构错配直接拒绝，不回退全分区对象图。 */
-export async function openDbSections(plan: RestorePlan): Promise<(name: string) => DbSection> {
+/** 库名必须与地址一致、仓名不得重复：包被改过时后面的写入会落到错误的库上 */
+function assertDbSection(section: DbSection, name: string): DbSection {
+  if (!section || section.name !== name || !Array.isArray(section.stores)) {
+    throw messageError('bundleAddressMismatch');
+  }
+  const stores = section.stores.map(store => (store && typeof store.name === 'string' ? store.name : ''));
+  if (stores.includes('') || new Set(stores).size !== stores.length) throw messageError('bundleAddressMismatch');
+  return section;
+}
+
+/**
+ * 预检与写入共用同一个入口，结构错配直接拒绝，不回退全分区对象图。
+ *
+ * v3 一个库一条 `idb/<n>.json`：每次调用读一次、解析一次，解码写完后即可回收。
+ * v1/v2 只有一条 `idb.json`，从缓存字节里按库切片。
+ * 返回的函数每次都给新对象——调用方会就地解码，不能与别处共用。
+ */
+export async function openDbSections(plan: RestorePlan): Promise<(name: string) => Promise<DbSection>> {
+  const files = dbFilesOf(plan.bundle.manifest);
+  if (files.size > 0) {
+    return async name => {
+      const file = files.get(name);
+      if (file === undefined) throw messageError('bundleAddressMismatch');
+      return assertDbSection(await plan.bundle.readJson<DbSection>(file), name);
+    };
+  }
   const skeleton = plan.sections.idb?.dbs ?? [];
   const order = new Map(skeleton.map((db, index) => [db.name, index]));
   const source = await idbSourceOf(plan);
   if (!source || source.ranges.length !== skeleton.length) throw messageError('bundleAddressMismatch');
-  return name => {
+  return async name => {
     const index = order.get(name);
     if (index === undefined || !source.ranges[index]) throw messageError('bundleAddressMismatch');
-    const parsed = parseJson(textOf(source.bytes, source.ranges[index])) as DbSection;
-    if (parsed?.name !== name) throw messageError('bundleAddressMismatch');
-    return parsed;
+    return assertDbSection(parseJson(textOf(source.bytes, source.ranges[index])) as DbSection, name);
   };
 }
 
@@ -160,7 +183,7 @@ export async function applyDbs(state: ApplyState): Promise<void> {
       bump(state.report, item, 'skipped');
       continue;
     }
-    const section = sectionOf(name);
+    const section = await sectionOf(name);
     if (orderMerge) await mergeOrderRecord(section);
     try {
       const outcome = await writeAddr(

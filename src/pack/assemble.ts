@@ -101,14 +101,14 @@ export async function packTo(
         crc: encoded.crc,
       });
       sectionMeta.push({
-        id: task.file.replace(/\.json$/, '').replace(/\//g, ':'),
+        id: task.id,
         file: task.file,
         entries: task.entries,
         bytes: encoded.size,
         // 压缩流的 CRC 就是未压缩数据的 CRC，与 zip 中央目录同源
         crc32: hex32(encoded.crc),
         ...(task.slots !== undefined ? { slots: task.slots } : {}),
-        ...(task.dbs !== undefined ? { dbs: task.dbs } : {}),
+        ...(task.db !== undefined ? { db: task.db } : {}),
       });
     },
   });

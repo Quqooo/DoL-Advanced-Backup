@@ -2,7 +2,7 @@ import { hex32 } from '../core/format';
 import { SELF_PACK_INNER } from '../core/constants';
 import { MessageError, type MessageParam } from '../core/error';
 import { parseJson } from '../core/json';
-import { parseManifest, type Manifest, type ManifestSection } from '../core/manifest';
+import { dbFilesOf, parseManifest, type Manifest, type ManifestSection } from '../core/manifest';
 import { hasModPackMagic, modPackEntryRange, readModPackLayoutFrom } from '../core/modpack';
 import { decodeEntry } from '../pack/codec';
 import { blobSource, bytesSource, openZip, sliceSource, Zip64Unsupported, ZipEntryCorrupt, type ZipSource } from '../core/zipread';
@@ -100,14 +100,22 @@ export function verifyIndex(manifest: Manifest): void {
   } else if (manifest.index.saves.length > countOf('saves')) {
     fail('verify', 'bundleSaveIndex', manifest.index.saves.length, countOf('saves'));
   }
-  // 整库的 entries 与 dbs 都是实际写进分区的库数；导出途中消失或被跳过的库不进索引
-  const idb = sectionOf('idb');
-  if (idb?.dbs !== undefined) {
-    if (manifest.index.dbs.length !== idb.dbs) {
-      fail('verify', 'bundleDbIndex', manifest.index.dbs.length, idb.dbs);
+  // 整库：v3 一库一条分区，库名必须与索引一一对应；v1/v2 只有一条，按库数对照。
+  // 导出途中消失或被跳过的库既没有分区也没有索引项，两边同样少一条
+  if (manifest.format >= 3) {
+    const files = dbFilesOf(manifest);
+    if (files.size !== manifest.index.dbs.length || manifest.index.dbs.some(db => !files.has(db.name))) {
+      fail('verify', 'bundleDbIndex', manifest.index.dbs.length, files.size);
     }
-  } else if (manifest.index.dbs.length > countOf('idb')) {
-    fail('verify', 'bundleDbIndex', manifest.index.dbs.length, countOf('idb'));
+  } else {
+    const idb = sectionOf('idb');
+    if (idb?.dbs !== undefined) {
+      if (manifest.index.dbs.length !== idb.dbs) {
+        fail('verify', 'bundleDbIndex', manifest.index.dbs.length, idb.dbs);
+      }
+    } else if (manifest.index.dbs.length > countOf('idb')) {
+      fail('verify', 'bundleDbIndex', manifest.index.dbs.length, countOf('idb'));
+    }
   }
 }
 
@@ -206,8 +214,11 @@ export async function openBundle(source: Uint8Array | Blob): Promise<Bundle> {
   });
 
   /**
-   * `idb.json` 一次恢复会被骨架、预检、写入三处读；它可能有上百 MB，
+   * v1/v2 的 `idb.json` 一次恢复会被骨架、预检、写入三处读；它可能有上百 MB，
    * 每处都解一遍既费时间又反复占内存。只缓存这一份，其余条目照旧按需读。
+   *
+   * v3 的整库是每个库一条 `idb/<n>.json`：缓存它们等于把整库重新压在内存里，
+   * 恢复侧按「读一个库、用完即弃」处理，这里不缓存。
    */
   let idbBytes: Uint8Array | null = null;
 

@@ -26,17 +26,21 @@ import { assertSupported } from './graph';
 import type { UnsupportedPolicy } from './types';
 
 /**
- * 一个分区：`write` 负责序列化进 sink。小分区一次写完；整库从一致性缓存分页编码。
- * 原始记录整库驻留，编码结果流式写出。
+ * 一个分区文件：`write` 负责序列化进 sink。
+ *
+ * v3 起整库一个库一条分区（`idb/<n>.json`），`db` 记库名；小分区一次写完，
+ * 整库从一致性缓存分页编码，编码结果流式写出。
  */
 export interface SectionTask {
+  /** 清单里的分区 id：`keys` / `saves` / `idb` / `mods` */
+  id: string;
   file: string;
-  /** 树与清单上的条目数（整库是实际写入的库数；存档是槽数 + 详情 + 旧式存档） */
+  /** 树与清单上的条目数（一个库算一条；存档是槽数 + 详情 + 旧式存档） */
   entries: number;
   /** 存档分区：实际写入的槽数，清单用它和 `index.saves` 精确对照 */
   slots?: number;
-  /** 整库分区：实际写入的库数；写完才知道（导出途中消失的库不进索引） */
-  dbs?: number;
+  /** 整库分区：这条文件是哪个库 */
+  db?: string;
   write(sink: JsonSink): Promise<void>;
 }
 
@@ -71,9 +75,10 @@ export interface BuildInput {
 }
 
 /** 小分区：整个对象一次写完 */
-function plainSection(file: string, json: unknown, entries: number, refs: Set<string>): SectionTask {
+function plainSection(id: string, file: string, json: unknown, entries: number, refs: Set<string>): SectionTask {
   collectBlobRefs(json, refs);
   return {
+    id,
     file,
     entries,
     async write(sink) {
@@ -157,30 +162,30 @@ async function databaseUnsupported(name: string, reader: DbReader): Promise<unkn
 }
 
 /**
- * 整库分区：边翻页边写。
+ * 一个库的分区文件：边翻页边写。
  *
- * 单事务缓存整库原始记录后分页编码，接受原始对象图常驻的内存代价。
+ * 单事务缓存整库原始记录后分页编码，接受这个库的对象图常驻的内存代价——只驻留一个库。
  * 写入字节直接进入压缩流，整段 JSON 不合并成一条字符串。
  * 元信息（keyPath / autoIncrement / 索引）与记录一起写，恢复时才能原样建仓。
+ *
+ * 读者由调用方打开并关闭：跳过判断必须在建立分区之前做完，已建立的分区收不回来。
  */
 function databaseTask(
-  names: readonly string[],
+  name: string,
+  file: string,
+  reader: DbReader,
   blobs: BlobTable,
   refs: Set<string>,
-  /** 每个库写完交一次字节数；库在导出途中消失或被跳过时给 null，索引里就不收它 */
-  onDatabaseDone: (name: string, bytes: number | null) => void,
-  /** 预检发现不支持的值时由它决定跳过还是抛出；`undefined` 表示直接编码、不预检 */
-  shouldSkip: ((error: unknown) => Promise<boolean>) | undefined,
-  skipped: Set<string>,
+  /** 写完交出这个库的字节数；索引按它显示体积 */
+  onDone: (bytes: number) => void,
 ): SectionTask {
-  const task: SectionTask = {
-    file: 'idb.json',
-    entries: names.length,
+  return {
+    id: 'idb',
+    file,
+    db: name,
+    entries: 1,
     async write(sink) {
-      // 索引要按库记大小：写入的字节先过一层计数，flush 之后差值就是这一个库的量
       let written = 0;
-      /** 实际写进分区的库数：与 `entries`（想写的库数）可能差一个导出途中消失的库 */
-      let dbs = 0;
       const counted: JsonSink = {
         write(chunk) {
           written += chunk.length;
@@ -188,74 +193,41 @@ function databaseTask(
         },
       };
       const writer = createJsonWriter(counted);
-      writer.raw('{"dbs":[');
-      let firstDb = true;
-      for (const name of names) {
-        const before = written;
-        const reader = await openDbReader(name);
-        if (!reader) throw messageError('packSelectionMissing', name);
-        const failure = shouldSkip ? await databaseUnsupported(name, reader) : null;
-        if (failure && shouldSkip && await shouldSkip(failure)) {
-          skipped.add(idbAddr(name));
-          reader.close();
-          onDatabaseDone(name, null);
-          continue;
-        }
-        if (failure) {
-          reader.close();
-          throw failure;
-        }
-        {
-          dbs += 1;
-          try {
-            if (!firstDb) writer.raw(',');
-            firstDb = false;
-            writer.raw(`{"name":${JSON.stringify(name)},"version":${reader.version},"stores":[`);
-            let firstStore = true;
-            for (const store of reader.stores) {
-              if (!firstStore) writer.raw(',');
-              firstStore = false;
-              writer.raw(
-                `{"name":${JSON.stringify(store.name)},"keyPath":${JSON.stringify(store.keyPath)},`
-                + `"autoIncrement":${store.autoIncrement},"indexes":${JSON.stringify(store.indexes)},"records":[`,
-              );
-              let after: DbKey | undefined;
-              let firstRecord = true;
-              for (;;) {
-                const page = await reader.page(store.name, after, PAGE);
-                if (page.length === 0) break;
-                for (const record of page) {
-                  // 值里要算哈希的二进制会在这一步进 blob 表，引用同时记进 refs
-                  const encoded = {
-                    key: await encodeValue(record.key, blobs, `${name}/${store.name}/key`),
-                    value: await encodeValue(record.value, blobs, `${name}/${store.name}`),
-                  };
-                  collectBlobRefs(encoded, refs);
-                  if (!firstRecord) writer.raw(',');
-                  firstRecord = false;
-                  writer.value(encoded);
-                }
-                after = page[page.length - 1].key;
-                if (page.length < PAGE) break;
-              }
-              writer.raw(']}');
-            }
-            writer.raw(']}');
-          } finally {
-            reader.close();
+      writer.raw(`{"name":${JSON.stringify(name)},"version":${reader.version},"stores":[`);
+      let firstStore = true;
+      for (const store of reader.stores) {
+        if (!firstStore) writer.raw(',');
+        firstStore = false;
+        writer.raw(
+          `{"name":${JSON.stringify(store.name)},"keyPath":${JSON.stringify(store.keyPath)},`
+          + `"autoIncrement":${store.autoIncrement},"indexes":${JSON.stringify(store.indexes)},"records":[`,
+        );
+        let after: DbKey | undefined;
+        let firstRecord = true;
+        for (;;) {
+          const page = await reader.page(store.name, after, PAGE);
+          if (page.length === 0) break;
+          for (const record of page) {
+            // 值里要算哈希的二进制会在这一步进 blob 表，引用同时记进 refs
+            const encoded = {
+              key: await encodeValue(record.key, blobs, `${name}/${store.name}/key`),
+              value: await encodeValue(record.value, blobs, `${name}/${store.name}`),
+            };
+            collectBlobRefs(encoded, refs);
+            if (!firstRecord) writer.raw(',');
+            firstRecord = false;
+            writer.value(encoded);
           }
+          after = page[page.length - 1].key;
+          if (page.length < PAGE) break;
         }
-        await writer.flush();
-        onDatabaseDone(name, written - before);
+        writer.raw(']}');
       }
       writer.raw(']}');
       await writer.flush();
-      // 跳过的库没有写进分区：清单里的条目数与索引都只算真正写进去的
-      task.dbs = dbs;
-      task.entries = dbs;
+      onDone(written);
     },
   };
-  return task;
 }
 
 function saveSlots(selected: ReadonlySet<string>): Set<number> {
@@ -354,7 +326,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
   }
   if (keys.length > 0) {
     announce('keys.json');
-    await onSection(plainSection('keys.json', { items: keys }, keys.length, refs));
+    await onSection(plainSection('keys', 'keys.json', { items: keys }, keys.length, refs));
   }
   index.keys = keys.map<IndexKey>(entry => ({ a: entry.a, b: jsonSize(entry.v) }));
   advance('keys');
@@ -406,7 +378,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
     const entries = rows.length + detailRows.length + (hasLegacy ? 1 : 0);
     if (entries > 0) {
       announce('saves.json');
-      const task = plainSection('saves.json', { engine: 'idb', saves: rows, details: detailRows, legacy }, entries, refs);
+      const task = plainSection('saves', 'saves.json', { engine: 'idb', saves: rows, details: detailRows, legacy }, entries, refs);
       // 清单与索引各记一份槽数：读包时据此精确对照，不必猜 details 有没有孤儿
       task.slots = rows.length;
       await onSection(task);
@@ -435,26 +407,40 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
   }
   advance('saves');
 
-  /* ---------- 整库：结构、索引与全部记录 ---------- */
+  /* ---------- 整库：一个库一条分区 ---------- */
   if (wantedDbs.length > 0) {
     const present = new Set((await databases()).map(item => item.name));
     for (const name of wantedDbs) {
       if (!present.has(name)) throw messageError('packSelectionMissing', name);
     }
-    const names = wantedDbs;
-    if (names.length > 0) {
-      announce('idb.json');
-      // 每读完一个库推进一份；整库的进度就在这一段里，不再有更细的刻度
-      const dbIndex: IndexDb[] = [];
-      await onSection(databaseTask(names, blobs, refs, (name, bytes) => {
-        // 库在导出途中消失或被跳过就没有索引项，恢复页也就不会列它
-        if (bytes !== null) dbIndex.push({ name, b: bytes });
-        advance('idb', 1 / names.length, 'idb.json');
-      }, policy === 'abort' ? undefined : skipUnsupported, skipped));
-      index.dbs = dbIndex;
-    } else {
-      advance('idb');
+    const skipUnsupportedDb = policy === 'abort' ? undefined : skipUnsupported;
+    // 每读完一个库推进一份；整库的进度就在这一段里，不再有更细的刻度
+    const dbIndex: IndexDb[] = [];
+    /** 已经写进包的库数：文件名按它连续编号，跳过的库不留空号 */
+    let written = 0;
+    for (const name of wantedDbs) {
+      const reader = await openDbReader(name);
+      if (!reader) throw messageError('packSelectionMissing', name);
+      // 文件名不能直接取库名：库名可能含 `/`、超长，或与别的库只差大小写
+      let file: string | null = null;
+      try {
+        const failure = skipUnsupportedDb ? await databaseUnsupported(name, reader) : null;
+        if (failure && skipUnsupportedDb && (await skipUnsupportedDb(failure))) {
+          // 跳过的库没有索引项，恢复页也就不会列它
+          skipped.add(idbAddr(name));
+        } else {
+          if (failure) throw failure;
+          file = `idb/${written}.json`;
+          announce(file);
+          await onSection(databaseTask(name, file, reader, blobs, refs, bytes => dbIndex.push({ name, b: bytes })));
+          written += 1;
+        }
+      } finally {
+        reader.close();
+      }
+      advance('idb', 1 / wantedDbs.length, file ?? name);
     }
+    index.dbs = dbIndex;
   }
 
   /* ---------- 模组包与两份列表 ---------- */
@@ -463,6 +449,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
     announce('mods.json');
     await onSection(
       plainSection(
+        'mods',
         'mods.json',
         {
           order: wantOrder ? lists.enabled : null,

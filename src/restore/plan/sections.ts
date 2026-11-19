@@ -1,4 +1,5 @@
 import { parseJson } from '../../core/json';
+import { dbFilesOf } from '../../core/manifest';
 import { messageError } from '../../core/error';
 import {
   extract,
@@ -68,11 +69,14 @@ async function readIdbSkeleton(bundle: Bundle): Promise<IdbSection | null> {
 type SectionKey = 'keys' | 'saves' | 'idb' | 'mods';
 
 /**
- * 完整读四段分区。**写入前才调用**：计划阶段只用 manifest 里的索引建树。
+ * 完整读各段分区。**写入前才调用**：计划阶段只用 manifest 里的索引建树。
  *
- * 权重按解压后的体量给：`idb.json` 解出来上百 MB，另外三段只有几 MB，
- * 按文件数平分会让进度条在整库这一段落上停住。整库仍只读骨架，
- * 记录留给 `applyDbs` 逐库切片解析，避免整库对象图常驻。
+ * 权重按解压后的体量给：整库解出来上百 MB，另外三段只有几 MB，
+ * 按文件数平分会让进度条在整库这一段落上停住。
+ *
+ * v1/v2 的整库只有一条 `idb.json`，这里读它的骨架（只数条数、不建记录），
+ * 记录留给 `applyDbs` 逐库切片解析。v3 起一个库一条 `idb/<n>.json`，
+ * 结构、条数与索引全在清单里，这一趟不读整库字节——只恢复存档时也就不必解压它。
  */
 export async function readSections(
   bundle: Bundle,
@@ -82,10 +86,12 @@ export async function readSections(
   const weights: [SectionKey, string, number][] = [
     ['keys', 'keys.json', 5],
     ['saves', 'saves.json', 15],
-    ['idb', 'idb.json', 70],
+    ...(bundle.has('idb.json') ? [['idb', 'idb.json', 70] as [SectionKey, string, number]] : []),
     ['mods', 'mods.json', 10],
   ];
   const present = weights.filter(([, file]) => bundle.has(file));
+  // v3 只恢复整库时这里一个文件都不读：直接报完成，不把进度条留在起点
+  if (present.length === 0) onProgress?.(1);
   const total = present.reduce((sum, [, , weight]) => sum + weight, 0);
   let done = 0;
 
@@ -114,7 +120,9 @@ export function verifySectionIndex(bundle: Bundle, sections: PackageSections): v
   const index = bundle.manifest.index;
   same((sections.keys?.items ?? []).map(item => item.a), index.keys.map(item => item.a));
   same((sections.saves?.saves ?? []).map(item => item.slot), index.saves.map(item => item.slot));
-  same((sections.idb?.dbs ?? []).map(item => item.name), index.dbs.map(item => item.name));
+  // v3 的库名在分区元数据上（没有整库骨架可读），v1/v2 从骨架取
+  const dbNames = sections.idb ? sections.idb.dbs.map(item => item.name) : [...dbFilesOf(bundle.manifest).keys()];
+  same(dbNames, index.dbs.map(item => item.name));
   const details = (sections.saves?.details ?? []).map(item => item.slot);
   if (new Set(details).size !== details.length || details.some(slot => !index.saves.some(item => item.slot === slot))
     || Boolean(sections.saves?.legacy?.saves !== null && sections.saves?.legacy?.saves !== undefined) !== index.legacy) throw messageError('bundleAddressMismatch');

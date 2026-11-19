@@ -615,7 +615,7 @@ const ZH: Strings = {
     bundleCrcMismatch: file => `${file} 的 CRC 与清单不符`,
     bundleKeyIndex: (entries, count) => `键索引为 ${entries} 条，与 keys.json 的 ${count} 条不符`,
     bundleSaveIndex: (entries, count) => `存档索引为 ${entries} 条，多于 saves.json 的 ${count} 项`,
-    bundleDbIndex: (entries, count) => `库索引为 ${entries} 条，多于 idb.json 的 ${count} 个库`,
+    bundleDbIndex: (entries, count) => `库索引为 ${entries} 条，与分区的 ${count} 个库不一致`,
     bundleEntryJson: path => `${path} 不是合法 JSON`,
     restoreEmpty: '包内没有可恢复的条目',
     // 写入
@@ -1015,7 +1015,7 @@ const EN: Strings = {
     bundleCrcMismatch: file => `The CRC of ${file} does not match the manifest`,
     bundleKeyIndex: (entries, count) => `The key index has ${entries} entries, but keys.json has ${count}`,
     bundleSaveIndex: (entries, count) => `The save index has ${entries} entries, more than the ${count} in saves.json`,
-    bundleDbIndex: (entries, count) => `The database index has ${entries} entries, more than the ${count} in idb.json`,
+    bundleDbIndex: (entries, count) => `The database index has ${entries} entries but the sections list ${count} databases`,
     bundleEntryJson: path => `${path} is not valid JSON`,
     restoreEmpty: 'The pack has nothing to restore',
     // 写入

@@ -44,9 +44,13 @@ export interface SnapshotDraft {
   createdAt: string;
 }
 
-/** 列表要显示的三项：分区清单、条目数、字节数，都从 manifest 读取 */
+/**
+ * 列表要显示的三项：分区清单、条目数、字节数，都从 manifest 读取。
+ *
+ * 整库从 v3 起一个库一条分区：按 id 去重，清单里只列一次 `idb`。
+ */
 export function scopeOf(manifest: Manifest): string[] {
-  return manifest.sections.map(section => section.id);
+  return [...new Set(manifest.sections.map(section => section.id))];
 }
 
 export function metaOf(manifest: Manifest, bytes: number, draft: SnapshotDraft): SnapshotMeta {
