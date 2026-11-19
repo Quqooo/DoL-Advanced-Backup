@@ -22,6 +22,7 @@ import { selfFiles } from './selfboot';
 import type { PackHooks, PackMeta, PackOptions, PackOutcome, PendingItem } from './types';
 import { crc32, payloadLength, zipPlanSize, ZipWriter, type ZipEntry } from './zip';
 
+const EMPTY = new Uint8Array(0);
 
 /**
  * 包名与 manifest 的时间戳同源。
@@ -223,6 +224,8 @@ export async function packTo(
         crc: crc32(item.bytes),
       });
       doneBytes += bytes;
+      // 源字节已经变成 entries 里的压缩结果：装配段不该再为它留一份
+      item.bytes = EMPTY;
       emit('encode', encodeRatio(doneBytes));
     };
 
@@ -245,6 +248,9 @@ export async function packTo(
       doneBytes += encoded.size;
       emit('encode', encodeRatio(doneBytes));
     }
+    // 数据块与打包块的源字节都已进包：装配段只需要压缩结果
+    blobs.releasePacked();
+    blobs.release();
 
     emit('assemble', ENCODE_END);
     // 与 manifest.createdAt 同源：导出侧提前算过同一个名字，两边不能各取一次当前时间；

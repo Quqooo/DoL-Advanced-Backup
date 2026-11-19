@@ -98,6 +98,8 @@ const PACKED_FILE = 'data/images.bin';
 
 export type PackedRange = [offset: number, length: number];
 
+const EMPTY = new Uint8Array(0);
+
 /**
  * 打包在一起的数据块（目前只有 data URL 图片）。
  *
@@ -168,6 +170,15 @@ class PackedStore {
    */
   async digest(): Promise<string> {
     return sha256Hex(concatHashes(this.hashes));
+  }
+
+  /**
+   * 压缩完成后释放：字节已经进了包，源分块不必留到装配段。
+   * 就地清空数组——`parts` 视图可能还指向同一个数组。
+   */
+  release(): void {
+    this.chunks.length = 0;
+    this.hashes.length = 0;
   }
 
   get count(): number {
@@ -254,6 +265,16 @@ export class BlobTable {
       count: store.count,
       digest: await store.digest(),
     };
+  }
+
+  /** 打包块已经压进包之后调用：源分块与块哈希都可以回收 */
+  releasePacked(): void {
+    this.packedStore?.release();
+  }
+
+  /** 数据块都已压进包之后：源字节交还，装配段只剩压缩结果 */
+  release(): void {
+    for (const item of this.items.values()) item.bytes = EMPTY;
   }
 
   /** 引用闭合的收尾：没人引用的 blob 不进包，缺引用由调用方中止导出 */
