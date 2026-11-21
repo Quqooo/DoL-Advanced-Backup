@@ -24,7 +24,7 @@ import {
   SETTINGS_IDB,
   SETTINGS_THEME,
 } from './keys';
-import { list as mappingList, matchesRule, type MappingEntry } from './mapping';
+import { list as mappingList, matchesRule, type MappingEntry, type MappingTable } from './mapping';
 import type { ItemFlags } from './item';
 
 /**
@@ -33,20 +33,28 @@ import type { ItemFlags } from './item';
  *
  * 扫描与读包共用这一份；两处各算一遍，同一份数据就会在两个分组之间漂。
  */
+export interface ImagePackDbNames {
+  readonly order: string;
+  readonly fileList: string;
+  readonly imageStore: string;
+}
+
 export interface GroupContext {
-  mapping: readonly MappingEntry[];
+  mapping: MappingTable;
+  /** 当前宿主实际使用的三个物理库名。包内映射不能更改它们的角色。 */
+  imagePackDbs?: ImagePackDbNames;
   /** 未识别数据的域名层；不给就只有 `other` 一层 */
   origin?: string;
 }
 
 /**
- * 组一份分组上下文：映射表取当前生效的那份，`origin` 取调用方给的域名层。
+ * 组一份分组上下文：默认只看本机映射；包计划可显式传自己的表。
  *
  * `core` 不能 import `host`，所以 origin 由采集侧与恢复侧各传一次——判定只有这一份，
  * 两边传的都是 `currentOrigin()`。
  */
-export function makeGroupContext(origin: string): GroupContext {
-  return { mapping: mappingList(), origin };
+export function makeGroupContext(origin: string, mapping = mappingList(), imagePackDbs?: ImagePackDbNames): GroupContext {
+  return { mapping, origin, imagePackDbs };
 }
 
 /** 安全模式状态：这台机器的启动失败计数与开关，迁移到别的机器上可能直接把人锁进安全模式 */
@@ -93,18 +101,18 @@ const STATIC_KEY_PATTERNS: readonly { test: RegExp; group: string }[] = [
   { test: /^SimpleCryptWrapper_.+_password$/, group: DECRYPT_GROUP },
 ];
 
-/**
- * 整库的静态分组：这几个库属于模组加载器自己，不该落到「其他」或「外部模组数据」。
- * 图像包的排序是用户设置，两个缓存库能从模组包重建。
- */
-const STATIC_DB_GROUPS: readonly { keys: readonly string[]; group: string }[] = [
-  { keys: [IMAGE_ORDER_DB], group: 'mods/image-order' },
-  { keys: [IMAGE_FILELIST_DB, IMAGE_STORE_DB], group: 'mods/image-cache' },
-  { keys: [NEO_CACHE_DB], group: NEO_CACHE_GROUP },
-];
-
-/** 图像包缓存库：能重建，标准档与模组档都不勾 */
+export const IMAGE_ORDER_GROUP = 'mods/image-order';
+/** 图像包缓存库能重建，三种预设都不勾。 */
 export const IMAGE_CACHE_GROUP = 'mods/image-cache';
+
+/** 先认当前宿主的物理库，保留默认名用于识别历史布局。 */
+export function imagePackDbGroup(name: string, actual?: ImagePackDbNames): typeof IMAGE_ORDER_GROUP | typeof IMAGE_CACHE_GROUP | null {
+  if (actual?.order === name) return IMAGE_ORDER_GROUP;
+  if (actual?.fileList === name || actual?.imageStore === name) return IMAGE_CACHE_GROUP;
+  if (name === IMAGE_ORDER_DB) return IMAGE_ORDER_GROUP;
+  if (name === IMAGE_FILELIST_DB || name === IMAGE_STORE_DB) return IMAGE_CACHE_GROUP;
+  return null;
+}
 
 
 /** 会话快照：真实游戏里刷新能回到原处，标准档勾它 */
@@ -168,7 +176,10 @@ export function groupOf(addr: string, ctx: GroupContext, flags?: ItemFlags): str
       // 旧包里的 Cookie 条目不恢复、不显示，也不参与分组
       return null;
     case 'idb':
-      return staticGroupOf(parsed.name, STATIC_DB_GROUPS) ?? mappingGroup(ctx.mapping, 'db', parsed.name) ?? otherGroup(ctx);
+      return imagePackDbGroup(parsed.name, ctx.imagePackDbs)
+        ?? (parsed.name === NEO_CACHE_DB ? NEO_CACHE_GROUP : null)
+        ?? mappingGroup(ctx.mapping, 'db', parsed.name)
+        ?? otherGroup(ctx);
     case 'save':
       // 自动存档（槽 0）与旧式存档直接挂在「存档」下，只有手动槽再套一层分页
       if (parsed.engine === 'legacy' || parsed.slot === 0) return 'saves';

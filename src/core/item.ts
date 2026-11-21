@@ -34,7 +34,7 @@ export const ITEM_KIND_BY_ID = Object.fromEntries(
 export interface ItemFlags {
   /** 本模组自身：模组包或它的数据 */
   self?: boolean;
-  /** 回退枚举未能确认所有同名存储副本的模组身份。 */
+  /** 未能确认所有同名存储副本的模组身份。 */
   modIdentityUnknown?: boolean;
   /** 由当前构建注入，不在存储里 */
   injected?: boolean;

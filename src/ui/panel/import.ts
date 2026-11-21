@@ -2,6 +2,7 @@ import { deletionsOf, importBundle, inspectPackage } from '../../app/import';
 import { resetScan } from '../../app/session';
 import { snapshotList, snapshotSource } from '../../app/snapshots';
 import { byteLengthOf, formatBytes, formatDateTime } from '../../core/format';
+import type { MappingTable } from '../../core/mapping';
 import type { Category, RestoreMode } from '../../core/types';
 import type { RestorePlan } from '../../restore/types';
 import { gameVersion } from '../../host/env';
@@ -9,6 +10,7 @@ import { confirmDialog } from '../../host/dialog';
 import { patchPrefs, readPrefs } from '../../app/prefs';
 import { t } from '../i18n';
 import { describeError, failureLines } from '../error-text';
+import { restoreWarningLines } from '../restore-warnings';
 import { dom } from './dom';
 import { createNotices, toast } from './feedback';
 import type { TaskGate } from './gate';
@@ -65,13 +67,21 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
 
   const summary = dom('p', 'advbk-note', '');
   summary.hidden = true;
-  const warningNote = dom('p', 'advbk-note advbk-warning', '');
+  const warningNote = dom('div', 'advbk-note advbk-warning');
+  warningNote.dataset.advbkRestoreWarnings = '1';
   warningNote.hidden = true;
+  const warningList = dom('ul', '');
+  warningList.style.maxHeight = '10rem';
+  warningList.style.overflow = 'auto';
+  warningList.style.overflowWrap = 'anywhere';
+  warningNote.appendChild(warningList);
 
   // 恢复时不写快照库（见 restore/plan/index.ts 的 skipsDb）。它属于本模组的数据，
   // 只有在干净恢复里关掉「保留本模组」才会进删除范围——那时才允许勾选，勾上就是「留着」。
   const hints = createHints();
+  let sourceMapping: MappingTable | undefined;
   const tree = createCheckTree({
+    mapping: () => sourceMapping,
     locked: item => {
       if (!isSnapshotAddr(item.addr)) return false;
       return mode === 'clean' && !keepSelfBox.checked ? false : t().snapshotLocked;
@@ -154,6 +164,10 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
    * 只有最后一次选择的回调能改界面与计划，见 `source-run.ts`。
    */
   const sourceRun = createSourceRun();
+  const snapshotListRun = createSourceRun();
+  let activeSourceRun = 0;
+  let snapshotId = '';
+  snapshotSelect.appendChild(snapshotPlaceholder());
 
   /**
    * 可用性只由两件事决定：有没有可恢复的包，以及全局任务锁有没有被占。
@@ -236,6 +250,7 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     if (!plan) {
       summary.hidden = true;
       warningNote.hidden = true;
+      warningList.replaceChildren();
       summary.dataset.advbkForecast = '{}';
       tree.setItems([]);
       tree.el.hidden = true;
@@ -249,22 +264,24 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     summary.dataset.advbkSummary = '1';
     refreshSummary();
 
-    const warnings = plan.warnings.length > 0 ? t().warningCount(plan.warnings.length) : '';
-    warningNote.hidden = warnings === '';
-    warningNote.textContent = warnings;
+    const warnings = restoreWarningLines(plan.warnings);
+    warningList.replaceChildren(...warnings.map(line => dom('li', '', line)));
+    warningNote.hidden = warnings.length === 0;
     syncMode();
     syncLocked();
   }
 
   function clearSource(): void {
     plan = null;
+    sourceMapping = undefined;
     renderPlan();
   }
 
-  function beginSource(): number {
-    const run = sourceRun.begin();
+  function beginSource(id?: number): number {
+    activeSourceRun = sourceRun.begin();
+    selectSnapshot(id);
     clearSource();
-    return run;
+    return activeSourceRun;
   }
 
   async function load(next: Uint8Array | Blob, name: string, run = beginSource()): Promise<void> {
@@ -283,9 +300,10 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     syncMode();
     let found = 0;
     try {
-      const inspected = await inspectPackage(next, mode, part => {
+      const inspected = await inspectPackage(next, mode, (part, mapping) => {
         // 读包途中换了来源：这一批属于上一份包，不能挂到新的树上
         if (!sourceRun.current(run)) return;
+        sourceMapping = mapping;
         found += part.length;
         tree.addItems(part);
         sourceNote.textContent = t().readingFound(found);
@@ -295,6 +313,7 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
       // 读包途中可能切过模式：计划里存着建树时的模式，删除范围按它算。
       // 不同步的话，界面显示干净恢复、预告却按合并给出「不删」，二次确认也会被跳过。
       inspected.mode = mode;
+      sourceMapping = inspected.mapping;
       plan = inspected;
       sourceNote.textContent = t().sourceLoaded(name, formatBytes(byteLengthOf(next)));
       renderPlan();
@@ -302,41 +321,53 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
       tree.applyPreset('full');
     } catch (error) {
       if (!sourceRun.current(run)) return;
-      summary.hidden = true;
-      warningNote.hidden = true;
-      tree.setItems([]);
-      tree.el.hidden = true;
+      clearSource();
+      selectSnapshot();
       sourceNote.textContent = t().sourceNone;
       notices.fail(error);
-      syncLocked();
     }
   }
 
+  function snapshotPlaceholder(): HTMLOptionElement {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = t().sourceSnapshot;
+    return option;
+  }
+
+  function selectSnapshot(id?: number): void {
+    snapshotId = id === undefined ? '' : String(id);
+    syncSnapshotSelection();
+  }
+
+  function syncSnapshotSelection(): void {
+    snapshotSelect.value = Array.from(snapshotSelect.options).some(option => option.value === snapshotId)
+      ? snapshotId
+      : '';
+  }
+
   async function fillSnapshots(): Promise<void> {
-    const current = snapshotSelect.value;
-    snapshotSelect.replaceChildren();
-    const blank = document.createElement('option');
-    blank.value = '';
-    blank.textContent = t().sourceSnapshot;
-    snapshotSelect.appendChild(blank);
+    const run = snapshotListRun.begin();
+    const owner = activeSourceRun;
     try {
       const rows = await snapshotList();
+      if (!snapshotListRun.current(run)) return;
       let autoIndex = 0;
-      for (const row of rows) {
+      const options = rows.map(row => {
         const option = document.createElement('option');
         option.value = String(row.id);
-        // 与快照页同一套称呼：自动槽按槽位编号，手动槽用改过的名字（没改名就是时间）
+        // 与快照页同一套称呼：自动槽按槽位编号，手动槽用改过的名字（没改名就是时间）。
         const name = row.kind === 'auto'
           ? t().autoSlot(++autoIndex)
           : row.label || formatDateTime(Date.parse(row.createdAt));
         option.textContent = `${name} · ${t().items(row.entries)} · ${formatBytes(row.bytes)}`;
-        snapshotSelect.appendChild(option);
-      }
+        return option;
+      });
+      // 一次提交；以提交时的来源为准，不能复活刷新开始时的旧选项。
+      snapshotSelect.replaceChildren(snapshotPlaceholder(), ...options);
+      syncSnapshotSelection();
     } catch (error) {
-      notices.fail(error);
-    }
-    if (current && [...snapshotSelect.options].some(option => option.value === current)) {
-      snapshotSelect.value = current;
+      if (snapshotListRun.current(run) && sourceRun.current(owner)) notices.fail(error);
     }
   }
 
@@ -344,18 +375,16 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     // 只是这一次的默认值：从快照点「恢复」时预选干净，用户不必再点一次
     if (preset) setMode(preset, false);
     // 从选择这一刻起旧计划就不可执行，不能等 payload 读完才作废
-    const run = beginSource();
+    const run = beginSource(id);
     sourceNote.textContent = t().reading;
     notices.clear();
     try {
-      await fillSnapshots();
-      if (!sourceRun.current(run)) return;
-      snapshotSelect.value = String(id);
+      void fillSnapshots();
       const loaded = await snapshotSource(id);
       if (!sourceRun.current(run)) return;
       if (!loaded) {
         clearSource();
-        snapshotSelect.value = '';
+        selectSnapshot();
         sourceNote.textContent = t().sourceNone;
         notices.show('error', t().snapshotMissing);
         return;
@@ -365,6 +394,7 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
       // 旧来源的错误只消化，不得清掉用户后来选的新来源
       if (!sourceRun.current(run)) return;
       clearSource();
+      selectSnapshot();
       sourceNote.textContent = t().sourceNone;
       notices.fail(error);
     }
@@ -374,8 +404,6 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     const file = picker.files?.[0];
     picker.value = '';
     if (!file) return;
-    // 换成外部 zip 了：下拉退回「从快照」占位项，不继续显示上一次选的快照
-    snapshotSelect.value = '';
     void load(file, file.name);
   });
   pickFile.addEventListener('click', () => {
@@ -429,6 +457,7 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
         toast([
           t().imported(result.applied, result.skipped, result.failed),
           result.deleted > 0 ? t().deleted(result.deleted) : '',
+          result.cancelled ? t().restoreCancelled : '',
         ].filter(Boolean).join(' · '));
         if (result.failures.length > 0) {
           const lines = failureLines(result.failures);
@@ -474,10 +503,7 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
   return {
     el,
     useSnapshot: (id, preset) => void useSnapshot(id, preset),
-    useBytes: (next, name) => {
-      snapshotSelect.value = '';
-      void load(next, name);
-    },
+    useBytes: (next, name) => void load(next, name),
     refresh: () => void fillSnapshots(),
   };
 }

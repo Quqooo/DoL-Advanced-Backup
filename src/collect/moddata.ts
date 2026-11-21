@@ -8,6 +8,7 @@ import { databases } from '../store/idb';
 import { measureDatabase } from '../store/idb/dump';
 import { readKey } from '../store/local';
 import { bootMetas } from './bootmetas';
+import { wholeDbGuard } from '../store/whole-db';
 import { measuredDbItem } from './dbitem';
 import type { CollectContext, Collector, CollectResult } from './index';
 
@@ -26,7 +27,9 @@ export const modDataCollector: Collector = {
   async collect(ctx: CollectContext): Promise<CollectResult> {
     const local = ctx.storageKeys('local').filter(key => !ctx.claimed.has(lsAddr(key)));
     const session = ctx.storageKeys('session').filter(key => !ctx.claimed.has(ssAddr(key)));
-    const dbNames = (await databases()).map(item => item.name);
+    const present = await databases();
+    const issue = wholeDbGuard();
+    const dbNames = present.map(item => item.name).filter(name => !issue(name) && !ctx.claimed.has(idbAddr(name)));
     const metas = [...bootMetas().values()];
     const self = selfEntry();
     const items: Item[] = [];

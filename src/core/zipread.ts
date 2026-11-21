@@ -10,7 +10,7 @@
  */
 
 import { crc32 } from './crc32';
-import { tryInflateRaw } from './deflate';
+import { DecodeOutputLimit, tryInflateRaw, tryInflateRawBounded } from './deflate';
 import { CENTRAL_SIZE, EOCD_SIZE, LOCAL_SIZE } from './zipstruct';
 
 /** 0 = STORE，8 = deflate，93 = zstd（本模组的 ZSTD 档） */
@@ -96,6 +96,7 @@ function parseCentral(bytes: Uint8Array, from: number, count: number): CentralEn
     const nameLength = view.getUint16(offset + 28, true);
     const extraLength = view.getUint16(offset + 30, true);
     const commentLength = view.getUint16(offset + 32, true);
+    if (offset + CENTRAL_SIZE + nameLength + extraLength + commentLength > view.byteLength) break;
     // 第 11 位是「名字按 UTF-8 编码」；没设时按 ZIP 规范的 CP437 解，而不是硬当 UTF-8
     const utf8 = (view.getUint16(offset + 8, true) & 0x0800) !== 0;
     out.push({
@@ -170,7 +171,7 @@ export function listZipEntries(bytes: Uint8Array): ZipListEntry[] {
 }
 
 /** 按 method 解一段数据；ZSTD 只有上层认得，交给调用方注入 */
-export type EntryDecoder = (data: Uint8Array, method: ZipMethod) => Promise<Uint8Array | null>;
+export type EntryDecoder = (data: Uint8Array, method: ZipMethod, size: number) => Promise<Uint8Array | null>;
 
 /**
  * 只取一个条目：读中央目录定位到本地头，避免为了一个文件解整包。
@@ -196,7 +197,7 @@ export async function readZipEntry(
   const raw = bytes.subarray(from, from + entry.comp);
   const owned = entry.method === 0 ? detach(raw, false) : raw;
   const decoded = decode
-    ? await decode(owned, entry.method)
+    ? await decode(owned, entry.method, entry.size)
     : entry.method === 0
       ? owned
       : entry.method === 8
@@ -250,10 +251,29 @@ export function sliceSource(source: ZipSource, start: number, length: number): Z
   };
 }
 
+/** 目录和开包条目各有独立预算，取得更多字节之前先检查已知元数据。 */
+export interface ZipDirectoryLimits {
+  centralBytes: number;
+  centralEntries: number;
+}
+
+export interface ZipEntryLimits {
+  input: number;
+  output: number;
+}
+
+export class ZipBudgetExceeded extends Error {
+  constructor(readonly subject: string, readonly kind: string, readonly limit: number) {
+    super(`${subject} exceeds ZIP resource budget (${kind}: ${limit})`);
+    this.name = 'ZipBudgetExceeded';
+  }
+}
+
 /** 打开后的包：条目表 + 按名取字节 */
 export interface ZipIndex {
   entries: ZipListEntry[];
-  read(name: string, decode?: EntryDecoder): Promise<Uint8Array | null>;
+  get(name: string): ZipListEntry | undefined;
+  read(name: string, decode?: EntryDecoder, limits?: ZipEntryLimits): Promise<Uint8Array | null>;
 }
 
 /**
@@ -262,8 +282,8 @@ export interface ZipIndex {
  * 一次 `read` 的代价取决于来源：Blob 是一次 `slice().arrayBuffer()`，字节源是 `subarray`。
  * 中央目录整段一次读回——它有几十到几百 KB，逐条读反而更慢。
  */
-export async function openZip(source: ZipSource): Promise<ZipIndex> {
-  const empty: ZipIndex = { entries: [], read: async () => null };
+export async function openZip(source: ZipSource, limits?: ZipDirectoryLimits): Promise<ZipIndex> {
+  const empty: ZipIndex = { entries: [], get: () => undefined, read: async () => null };
   if (source.size < EOCD_SIZE) return empty;
 
   const tailStart = Math.max(0, source.size - TAIL);
@@ -277,10 +297,23 @@ export async function openZip(source: ZipSource): Promise<ZipIndex> {
   const eocdAbs = tailStart + rel;
   const count = tailView.getUint16(rel + 10, true);
   const centralStart = tailView.getUint32(rel + 16, true);
-  // 中央目录在 [centralStart, eocdAbs)；起点被改坏的包按空包处理，交给上层报「不是 zip」
-  if (centralStart > eocdAbs) return empty;
-
-  const central = parseCentral(await source.read(centralStart, eocdAbs), 0, count);
+  // 中央目录在 [centralStart, eocdAbs)；先检查实际读区间和声明长度，绝不先切一份大缓冲。
+  const span = eocdAbs - centralStart;
+  const declaredSpan = tailView.getUint32(rel + 12, true);
+  if (span < 0) return empty;
+  if (limits && Math.max(span, declaredSpan) > limits.centralBytes) {
+    throw new ZipBudgetExceeded('ZIP', 'centralBytes', limits.centralBytes);
+  }
+  if (limits && count > limits.centralEntries) {
+    throw new ZipBudgetExceeded('ZIP', 'centralEntries', limits.centralEntries);
+  }
+  if (count * CENTRAL_SIZE > span || declaredSpan > span) return empty;
+  const centralBytes = centralStart >= tailStart
+    ? tail.subarray(centralStart - tailStart, rel)
+    : await source.read(centralStart, eocdAbs);
+  if (centralBytes.byteLength !== span) return empty;
+  const central = parseCentral(centralBytes, 0, count);
+  if (central.length !== count) return empty;
   const byName = new Map(central.map(entry => [entry.name, entry]));
   /**
    * 已经验过的条目。来源在一份 `ZipIndex` 的生命周期内不变（字节缓冲或固定 Blob），
@@ -290,27 +323,43 @@ export async function openZip(source: ZipSource): Promise<ZipIndex> {
 
   return {
     entries: central.map(({ name, method, comp, size, crc }) => ({ name, method, comp, size, crc })),
-    async read(name, decode) {
+    get: name => byName.get(name),
+    async read(name, decode, limits) {
       const entry = byName.get(name);
       if (!entry) return null;
+      if (limits && entry.size > limits.output) throw new ZipBudgetExceeded(name, 'declared', limits.output);
+      if (limits && entry.comp > limits.input) throw new ZipBudgetExceeded(name, 'compressed', limits.input);
+      if (entry.localOffset + LOCAL_SIZE > centralStart) return null;
       const head = await source.read(entry.localOffset, entry.localOffset + LOCAL_SIZE);
       const start = dataStartOf(viewOf(head));
       if (start < 0) return null;
       const from = entry.localOffset + start;
+      if (from + entry.comp > centralStart) return null;
       const raw = await source.read(from, from + entry.comp);
-      if (raw.byteLength < entry.comp) return null;
+      if (raw.byteLength !== entry.comp) return null;
+      if (limits && entry.method === 0 && raw.byteLength > entry.size) {
+        throw new ZipBudgetExceeded(name, 'actual', entry.size);
+      }
       const owned = entry.method === 0 ? detach(raw, source.owns) : raw;
-      const decoded = decode
-        ? await decode(owned, entry.method)
-        : entry.method === 0
-          ? owned
-          : entry.method === 8
-            ? await tryInflateRaw(owned)
-            : null;
-      if (verified.has(name)) return decoded;
+      let decoded: Uint8Array | null;
+      try {
+        decoded = decode
+          ? await decode(owned, entry.method, entry.size)
+          : entry.method === 0
+            ? owned
+            : entry.method === 8
+              ? await (limits ? tryInflateRawBounded(owned, entry.size) : tryInflateRaw(owned))
+              : null;
+      } catch (error) {
+        if (error instanceof DecodeOutputLimit) throw new ZipBudgetExceeded(name, 'actual', error.limit);
+        throw error;
+      }
       // null = 解不开（没有对应解码器、压缩方法不认识）：那是「读不了」，不是「内容坏了」
       if (decoded === null) return null;
-      if (!verifiedBytes(entry, decoded)) throw new ZipEntryCorrupt(name);
+      if (limits && decoded.byteLength > entry.size) throw new ZipBudgetExceeded(name, 'actual', entry.size);
+      if (decoded.byteLength !== entry.size || ((limits || !verified.has(name)) && crc32(decoded) !== entry.crc)) {
+        throw new ZipEntryCorrupt(name);
+      }
       verified.add(name);
       return decoded;
     },

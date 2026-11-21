@@ -1,7 +1,11 @@
+import { parseAddr } from '../../core/address';
 import { categoryOfGroup, type Item } from '../../core/item';
 import { isSnapshotAddr } from '../../core/presets';
 import type { Category, RestoreMode } from '../../core/types';
-import type { RestorePlan } from '../types';
+import { confirmedGameDb } from '../../store/db-identity';
+import { wholeDbGuard } from '../../store/whole-db';
+import { freezeModRemovals, isLocalModPackageKey, type FrozenModRemoval } from '../mods';
+import type { RestoreFailure, RestorePlan } from '../types';
 
 /**
  * 无论什么模式都不参与镜像的条目。
@@ -61,7 +65,13 @@ export function mirrorCandidates(
   scope: MirrorScope,
 ): Item[] {
   if (!local || scope === null) return [];
+  const issue = wholeDbGuard();
+  const supportsSlots = confirmedGameDb() !== null;
   return local.filter(item => {
+    const target = parseAddr(item.addr);
+    if (!target || (target.scheme === 'idb' && issue(target.name))) return false;
+    if (target.scheme === 'save' && target.engine === 'idb' && !supportsSlots) return false;
+    if (target.scheme === 'ls' && isLocalModPackageKey(target.name)) return false;
     if (selected.has(item.addr)) return false;
     if (keepsAlways(item)) return false;
     // 快照库是本模组的数据：勾着「保留本模组」时一直留着，关掉才进删除名单。
@@ -87,7 +97,29 @@ export function prepareMirror(plan: RestorePlan, selected: ReadonlySet<string>, 
   return { scope, candidates: mirrorCandidates(plan.local, guarded, keepSelf, scope) };
 }
 
-/** 删除预告：与镜像同一套判定，界面上的数字才对得上实际动作 */
+export interface FrozenRestoreMirror extends RestoreMirror {
+  readonly modRemovals: ReadonlyMap<string, FrozenModRemoval>;
+  readonly failures: readonly RestoreFailure[];
+}
+
+/** 执行确认之前冻结。只校验现有候选，不能把新出现的地址加入差集。 */
+export async function freezeMirror(
+  mirror: RestoreMirror, keepSelf: boolean, signal?: AbortSignal,
+): Promise<FrozenRestoreMirror> {
+  const candidates = mirror.candidates.map(item => Object.freeze({ ...item }));
+  const mods = candidates.filter(item => parseAddr(item.addr)?.scheme === 'mod');
+  const { removals, failures } = await freezeModRemovals(mods.map(item => item.addr), keepSelf, signal);
+  return {
+    scope: mirror.scope,
+    candidates: Object.freeze(candidates.filter(item => parseAddr(item.addr)?.scheme !== 'mod' || removals.has(item.addr))),
+    modRemovals: removals,
+    failures: mods.flatMap(item => failures.has(item.addr)
+      ? [{ category: categoryOfGroup(item.group), item: item.addr, error: failures.get(item.addr) }]
+      : []),
+  };
+}
+
+/** 删除预告：与镜像共用范围判定；执行确认前另行复核实际模组身份。 */
 export function forecastDeletions(
   local: readonly Item[] | null,
   selected: ReadonlySet<string>,

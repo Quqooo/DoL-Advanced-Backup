@@ -14,18 +14,19 @@ import {
 import { keyBytes } from '../core/format';
 import type { DeleteResult } from '../core/types';
 import { legacyHasSave } from '../core/legacy';
+import { confirmedGameDb } from './db-identity';
 import { clearDatabase, databases } from './idb';
 import { writeDatabase, type DbDump } from './idb/dump';
 import { listStorageKeys, readKey, removeKeys, writeKey, type StorageKind } from './local';
 import {
   deleteModValue,
-  modKeys,
   readIdbModLists,
   readModNames,
   writeModList,
   writeModValue,
 } from './mods';
-import { deleteSaveSlot, detailTime, gameDbName, listSaveSlots, readDetails, readLegacy, writeLegacy, writeSaves } from './saves';
+import { deleteSaveSlot, detailTime, listSaveSlots, readDetails, readLegacy, writeLegacy, writeSaves } from './saves';
+import { assertWholeDbTarget, wholeDbGuard } from './whole-db';
 
 /**
  * 地址 → 存储写入与删除。地址是唯一身份（`core/address.ts`），这一层只管「把它写回去 / 删掉 / 列出来」，
@@ -86,7 +87,8 @@ export async function writeAddr(
       return { count: 1 };
     }
     case 'db': {
-      if (parsed.scheme !== 'idb') throw messageError('addrMismatch', addr);
+      if (parsed.scheme !== 'idb' || parsed.name !== payload.value.name) throw messageError('addrMismatch', addr);
+      assertWholeDbTarget(parsed.name);
       const outcome = await writeDatabase(payload.value, options);
       return {
         count: outcome.records,
@@ -97,6 +99,7 @@ export async function writeAddr(
     case 'save': {
       const slot = parsed.scheme === 'save' && parsed.engine === 'idb' ? parsed.slot : -1;
       if (slot < 0) throw messageError('addrInvalid', addr);
+      if (confirmedGameDb() === null) throw messageError('dbNameUnknown');
       const save = payload.save as Record<string, unknown> | null;
       if (!save) throw messageError('saveEmpty');
       const detail = payload.detail as Record<string, unknown> | null;
@@ -141,6 +144,7 @@ export async function removeAddr(addr: string): Promise<DeleteResult> {
         // 旧包里的 Cookie 条目不恢复，也不从本机删除
         return { status: 'absent' };
       case 'idb':
+        assertWholeDbTarget(parsed.name);
         // 清空各仓而不是删除库：见 `clearDatabase`
         return (await clearDatabase(parsed.name)) > 0 ? { status: 'deleted' } : { status: 'absent' };
       case 'save': {
@@ -152,14 +156,14 @@ export async function removeAddr(addr: string): Promise<DeleteResult> {
           }
           return { status: 'deleted' };
         }
+        if (confirmedGameDb() === null) throw messageError('dbNameUnknown');
         // 读与删同一个事务：两步之间写进来的存档不会被误判
         return (await deleteSaveSlot(parsed.slot)) ? { status: 'deleted' } : { status: 'absent' };
       }
       case 'mod':
         return deleteModValue(parsed.name);
       case 'modlist':
-        await writeModList(parsed.list, null);
-        return { status: 'deleted' };
+        return (await writeModList(parsed.list, null)) ? { status: 'deleted' } : { status: 'absent' };
     }
   } catch (error) {
     return { status: 'failed', error };
@@ -221,10 +225,11 @@ export async function listAddrs({
 
   await attempt(async () => {
     // 这两个库由存档域与模组域细分，不再作为整库出现；加载器库名可能改过。
-    const skip = new Set([gameDbName(), modKeys().db]);
-    for (const database of await databases()) {
+    const present = await databases();
+    const issue = wholeDbGuard();
+    for (const database of present) {
       const addr = idbAddr(database.name);
-      if (skip.has(database.name) || claimed?.has(addr)) continue;
+      if (issue(database.name) || claimed?.has(addr)) continue;
       out.push({ addr, label: database.name });
     }
   });

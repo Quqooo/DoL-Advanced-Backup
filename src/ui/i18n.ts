@@ -1,5 +1,6 @@
 import type { Category, LangPref } from '../core/types';
 import type { ProgressPhase } from '../core/progress';
+import type { RestoreWarningCode } from '../restore/types';
 
 export type Lang = 'zh' | 'en';
 
@@ -15,7 +16,7 @@ export interface Strings {
   refresh: string;
   exportAction: string;
   exporting: string;
-  exported: (name: string, size: string, selfRestore: boolean) => string;
+  exported: (name: string, size: string, selfRestore: boolean, requested?: boolean) => string;
   reading: string;
   /** 读包 / 扫描边收边报：已经找到多少条 */
   readingFound: (count: number) => string;
@@ -120,6 +121,9 @@ export interface Strings {
   progressText: (label: string, percent: number) => string;
   phaseText: (phase: ProgressPhase) => string;
   warningCount: (count: number) => string;
+  restoreWarnings: Record<RestoreWarningCode, string>;
+  partialNoAddresses: string;
+  restoreCancelled: string;
   deletableCount: (count: number) => string;
   /**
    * 软依赖提示：导出与恢复前按类型汇总，参数是该类型的条数。
@@ -145,7 +149,7 @@ export interface Strings {
   autoSnapshotEmpty: string;
   /** 自动快照：回滚点写成，但清理旧自动槽失败 */
   autoSnapshotTrimFailed: (reason: string) => string;
-  snapshotExported: (name: string) => string;
+  snapshotExported: (name: string, requested?: boolean) => string;
   snapshotRemoved: string;
   snapshotRenameTitle: string;
   snapshotRenameHint: string;
@@ -192,6 +196,9 @@ export interface Strings {
   /** 有提示要先读时：不自动重载，等用户点这个按钮 */
   restorePackReload: string;
   restorePackDropped: string;
+  restorePackDropFailed: string;
+  restorePackAppliedDropFailed: string;
+  restorePackRetryDrop: string;
   restorePackError: (message: string) => string;
   restorePackCleanHint: string;
   /** 正本发现「自恢复包被当成模组装进来了」 */
@@ -290,7 +297,7 @@ const ZH: Strings = {
   refresh: '重新扫描',
   exportAction: '导出备份',
   exporting: '打包中…',
-  exported: (name, size, selfRestore) => `已导出 ${name} · ${size}${selfRestore ? ' · 可自恢复' : ''}`,
+  exported: (name, size, selfRestore, requested) => `${requested ? '已请求下载' : '已导出'} ${name} · ${size}${selfRestore ? ' · 可自恢复' : ''}`,
   reading: '读取包…',
   readingFound: count => `读取包… 已找到 ${count} 项`,
   scanning: count => `正在扫描… 已找到 ${count} 项`,
@@ -420,6 +427,16 @@ const ZH: Strings = {
       apply: '写入存储',
     })[phase],
   warningCount: count => `${count} 条警告`,
+  restoreWarnings: {
+    'newer-package': '此备份由更新版本的高级备份生成',
+    'missing-entry': '备份缺少文件',
+    'skipped-mod': '已跳过模组',
+    'mirror-skipped': '因写入失败未删除以下分类的数据',
+    'cookie-unsupported': '旧版备份中的 Cookie 不会恢复',
+    'partial-package': '此备份不完整，下列地址未导出且不会被镜像删除',
+  },
+  partialNoAddresses: '此备份不完整，但没有记录跳过的地址。',
+  restoreCancelled: '已取消。保留取消前已提交的更改。',
   deletableCount: count => `本机会删除 ${count} 项`,
   hintDeltaDowngrade: count => `带增量段的存档：${count}（本机游戏版本低于 0.5.6.10）`,
   hintSideloadMod: count => `内置模组或远程模组：${count}（恢复时将被安装为旁加载模组）`,
@@ -438,7 +455,7 @@ const ZH: Strings = {
   snapshotCreated: size => `已建快照 · ${size}`,
   autoSnapshotEmpty: '本机没有可备份的内容，因此未创建自动快照。',
   autoSnapshotTrimFailed: reason => `回滚点已创建，但旧自动快照清理失败：${reason}`,
-  snapshotExported: name => `已导出 ${name}`,
+  snapshotExported: (name, requested) => `${requested ? '已请求下载' : '已导出'} ${name}`,
   snapshotRemoved: '已删除快照',
   snapshotRenameTitle: '重命名快照',
   snapshotRenameHint: '留空则恢复默认名称。',
@@ -481,6 +498,9 @@ const ZH: Strings = {
   restorePackDone: '已完成，正在重载…',
   restorePackReload: '重新加载',
   restorePackDropped: '恢复包已卸载。刷新页面后不再提示。',
+  restorePackDropFailed: '未能确认恢复包已卸载。',
+  restorePackAppliedDropFailed: '数据已恢复，但未能确认恢复包已卸载。请重试卸载；无需再次恢复。',
+  restorePackRetryDrop: '重试卸载',
   restorePackError: message => `失败：${message}（恢复包已保留，可以重试）`,
   restorePackCleanHint: '干净恢复只保留包内的数据，本机多出的一律删除。',
   packFoundTitle: '检测到自恢复包',
@@ -601,6 +621,7 @@ const ZH: Strings = {
     bundleZip64: '包是 zip64 归档，本模组暂不支持；请用支持 zip64 的工具重新打包',
     bundleNoManifest: '缺少 manifest.json',
     bundleManifestUnreadable: 'manifest.json 无法解压',
+    bundleOpenBudget: (part, kind, limit) => `${part} 超过开包资源上限（${kind}，上限 ${limit}）`,
     bundleManifestJson: 'manifest.json 不是合法 JSON',
     bundleApp: '不是本模组生成的包',
     bundleFormat: '包格式版本不匹配',
@@ -623,6 +644,7 @@ const ZH: Strings = {
     saveEmpty: '存档数据为空',
     writeFailed: '写入失败',
     deleteFailed: '无法删除本机数据',
+    modListCorrupt: '模组列表已损坏，未改写列表。',
     addrInvalid: addr => `地址无效：${addr}`,
     addrMismatch: addr => `地址与值不匹配：${addr}`,
     openSaveDbFailed: '无法打开存档库',
@@ -667,10 +689,14 @@ const ZH: Strings = {
     snapshotNoScript: '当前环境读不到恢复脚本，因此无法套 ModPack 容器。请以模组方式安装本模组后重试。',
     // 导出 / 恢复包
     selfPackUnsupported: '包内条目使用了 JSZip 不支持的压缩方式，且未能在模组存储中找到原始字节',
+    selfPackIdentity: '无法验证当前恢复壳的存储身份，已拒绝写入',
+    selfPackTarget: name => `不能覆盖当前恢复壳：${name}`,
     importNoSource: '没有指定要恢复的包',
     importBusy: '另一项恢复正在进行，请等它完成后再试',
     importSnapshotFailed: reason => `自动快照失败：${reason}`,
     scanIncomplete: groups => `本机有 ${groups} 组数据未读出，因此无法确定干净恢复的删除范围。请到导出页重试失败的分组，然后再恢复。`,
+    hostDbReserved: name => `${name} 是宿主保留库。请取消选择这条整库数据，通过存档或模组条目恢复。`,
+    hostDbUnknown: name => `无法确认宿主库名，已停止整库操作（${name}）。请等游戏进入标题画面后再试。`,
     dbNameUnknown: '游戏存档库还没就绪，无法确定干净恢复的删除范围。请等游戏进入标题画面后再试，或改用覆盖模式。',
     modChangedDuringExport: name => `模组 ${name} 在导出过程中被改动，请重新导出`,
     androidNoSaveDialog: '这个安卓壳没有 save-dialog 插件，因此无法把文件写入设备',
@@ -688,7 +714,7 @@ const EN: Strings = {
   refresh: 'Rescan',
   exportAction: 'Export Backup',
   exporting: 'Packing…',
-  exported: (name, size, selfRestore) => `Exported ${name} · ${size}${selfRestore ? ' · self-restoring' : ''}`,
+  exported: (name, size, selfRestore, requested) => `${requested ? 'Download requested:' : 'Exported'} ${name} · ${size}${selfRestore ? ' · self-restoring' : ''}`,
   reading: 'Reading package…',
   readingFound: count => `Reading package… ${count} items found`,
   scanning: count => `Scanning… ${count} items found`,
@@ -818,6 +844,16 @@ const EN: Strings = {
       apply: 'Restoring',
     })[phase],
   warningCount: count => `${count} warnings`,
+  restoreWarnings: {
+    'newer-package': 'This backup was created by a newer version of Advanced Backup',
+    'missing-entry': 'Files missing from the backup',
+    'skipped-mod': 'Skipped mod',
+    'mirror-skipped': 'Deletion was skipped in categories with write failures',
+    'cookie-unsupported': 'Cookies from older backups will not be restored',
+    'partial-package': 'This backup is incomplete. These addresses were not exported and will not be deleted by mirroring',
+  },
+  partialNoAddresses: 'This backup is incomplete, but it does not list the skipped addresses.',
+  restoreCancelled: 'Restore cancelled. Changes committed before cancellation were kept.',
   deletableCount: count => `${count} items will be deleted here`,
   hintDeltaDowngrade: count => `Delta saves: ${count} (this game is below 0.5.6.10)`,
   hintSideloadMod: count => `Built-in or remote mods: ${count} (installed as sideloaded mods when restored)`,
@@ -836,7 +872,7 @@ const EN: Strings = {
   snapshotCreated: size => `Snapshot created · ${size}`,
   autoSnapshotEmpty: 'Nothing to back up, so no automatic snapshot was created.',
   autoSnapshotTrimFailed: reason => `Rollback point created, but old automatic snapshots could not be deleted: ${reason}`,
-  snapshotExported: name => `Exported ${name}`,
+  snapshotExported: (name, requested) => `${requested ? 'Download requested:' : 'Exported'} ${name}`,
   snapshotRemoved: 'Snapshot deleted',
   snapshotRenameTitle: 'Rename snapshot',
   snapshotRenameHint: 'Leave empty to restore the default name.',
@@ -879,6 +915,9 @@ const EN: Strings = {
   restorePackDone: 'Done. Reloading…',
   restorePackReload: 'Reload',
   restorePackDropped: 'Restore pack removed. It will not prompt again after a reload.',
+  restorePackDropFailed: 'Could not confirm removal of the restore pack.',
+  restorePackAppliedDropFailed: 'Data was restored, but removal of the restore pack could not be confirmed. Retry removal; there is no need to restore again.',
+  restorePackRetryDrop: 'Retry removal',
   restorePackError: message => `Failed: ${message} (the pack is kept, so you can retry)`,
   restorePackCleanHint: 'Clean restore keeps only what the pack contains and deletes everything else on this machine.',
   packFoundTitle: 'Self-restoring pack detected',
@@ -999,6 +1038,7 @@ const EN: Strings = {
     bundleZip64: 'The pack is a zip64 archive, which this mod does not support. Repack it with a tool that can write standard zip.',
     bundleNoManifest: 'manifest.json is missing',
     bundleManifestUnreadable: 'manifest.json could not be extracted',
+    bundleOpenBudget: (part, kind, limit) => `${part} exceeds the package-opening resource limit (${kind}, limit ${limit})`,
     bundleManifestJson: 'manifest.json is not valid JSON',
     bundleApp: 'This pack was not created by this mod',
     bundleFormat: 'The pack format version does not match',
@@ -1021,6 +1061,7 @@ const EN: Strings = {
     saveEmpty: 'Save data is empty',
     writeFailed: 'Write failed',
     deleteFailed: 'Could not delete local data',
+    modListCorrupt: 'The mod list is corrupt; no lists were overwritten.',
     addrInvalid: addr => `Invalid address: ${addr}`,
     addrMismatch: addr => `Address does not match the value: ${addr}`,
     openSaveDbFailed: 'Could not open the save database',
@@ -1065,10 +1106,14 @@ const EN: Strings = {
     snapshotNoScript: 'The restore script is not readable here, so a ModPack container cannot be built. Install this mod as a mod, then retry.',
     // 导出 / 恢复包
     selfPackUnsupported: 'The pack uses a compression method JSZip does not support, and the original bytes were not found in mod storage',
+    selfPackIdentity: 'The stored identity of the running restore pack could not be verified. No data was written.',
+    selfPackTarget: name => `Cannot overwrite the running restore pack: ${name}`,
     importNoSource: 'No package was given to restore',
     importBusy: 'Another restore is already running. Wait for it to finish and try again.',
     importSnapshotFailed: reason => `Automatic snapshot failed: ${reason}`,
     scanIncomplete: groups => `${groups} data groups could not be read, so the deletion scope of a clean restore cannot be determined. Retry the failed groups on the export page, then restore.`,
+    hostDbReserved: name => `${name} is a reserved host database. Deselect the database and restore its save slots or mods instead.`,
+    hostDbUnknown: name => `The host database names are not known. The database operation for ${name} was stopped. Try again from the title screen.`,
     dbNameUnknown: 'The game save database is not ready, so the deletion scope of a clean restore cannot be determined. Wait until the title screen appears and try again, or use overwrite mode.',
     modChangedDuringExport: name => `Mod ${name} changed while the pack was being written. Export again`,
     androidNoSaveDialog: 'This Android shell has no save-dialog plugin, so the file cannot be written to the device',

@@ -10,6 +10,7 @@ import {
   ssAddr,
 } from '../core/address';
 import { textByteLength } from '../core/format';
+import { assertWholeDbTarget } from '../store/whole-db';
 import { messageError } from '../core/error';
 import { stringifyJson } from '../core/json';
 import { createJsonWriter, jsonStringByteLength, type JsonSink } from '../core/jsonwrite';
@@ -132,17 +133,15 @@ function jsonSize(value: unknown): number {
 /** 每页多少条：1000 条约 8 MB（图像库），翻页事务数也还能接受 */
 const PAGE = 1000;
 
-/**
- * 跳过策略下的预检：整库只要有一条记录无法无损编码，就整库不进包。
- *
- * 库的记录已经在 `openDbReader` 里缓存好，这里只走结构、不算哈希、不读 Blob；
- * 跳过整库而不是跳过单条，否则恢复时的镜像删除会把没进包的那条当成「本机多余」。
- * 返回具体异常，供调用方询问用户时显示类型与路径。
- */
 function isUnsupportedValue(error: unknown): boolean {
   return (error as { id?: string } | null)?.id === 'unsupportedValue';
 }
 
+/**
+ * 预检与编码复用图扫描，自同一份缓存检查类型、形状与视图长度，无须哈希或读取 Blob。
+ * 任一记录无法无损编码就跳过整库，以免镜像把未进包的记录当成「本机多余」。
+ * 返回具体异常，供调用方询问用户时显示类型与路径。
+ */
 async function databaseUnsupported(name: string, reader: DbReader): Promise<unknown | null> {
   try {
     for (const store of reader.stores) {
@@ -161,7 +160,7 @@ async function databaseUnsupported(name: string, reader: DbReader): Promise<unkn
     }
     return null;
   } catch (error) {
-    if ((error as { id?: string }).id === 'unsupportedValue') return error;
+    if (isUnsupportedValue(error)) return error;
     throw error;
   }
 }
@@ -300,6 +299,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
   const slots = saveSlots(selected);
   const wantLegacy = selected.has(LEGACY_SAVE_ADDR);
   const wantedDbs = namesOfScheme(selected, 'idb');
+  for (const name of wantedDbs) assertWholeDbTarget(name);
   const modNames = namesOfScheme(selected, 'mod');
   // 列表在不在存储里决定要不要写 mods.json，也决定这一块占不占进度份额；
   // 只在勾了这两份列表时才开库，只导几个键的导出不该为它多开一次连接

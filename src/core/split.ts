@@ -36,7 +36,7 @@ export function splitPackage(
   crc: number,
   partSize: number,
 ): SplitPart[] {
-  if (!Number.isFinite(partSize) || partSize <= 0) throw messageError('splitPartSize');
+  if (!Number.isSafeInteger(partSize) || partSize <= 0) throw messageError('splitPartSize');
   const size = packageBlob.size;
   if (size > MAX_UINT32) throw messageError('splitTooLarge');
 
@@ -53,19 +53,25 @@ export function splitPackage(
   const central = centralHeader(facts, 0);
 
   // 中央目录在最后一卷内的偏移：最后一卷可能从数据中间开始
-  const total = local.length + size + central.length + EOCD_SIZE;
+  const centralStart = local.length + size;
+  const tailSize = central.length + EOCD_SIZE;
+  const total = centralStart + tailSize;
   const count = Math.ceil(total / partSize);
   if (count > MAX_SPLIT_PARTS) throw messageError('splitTooManyParts', count);
+  if (tailSize > partSize) throw messageError('splitPartSize');
 
-  const lastStart = (count - 1) * partSize;
-  const centralOffset = local.length + size - lastStart;
+  // 末卷已能放下完整中央目录时保留原卷边界，否则把末卷起点提前到目录开头。
+  const lastStart = Math.min((count - 1) * partSize, centralStart);
+  const centralOffset = centralStart - lastStart;
   const whole = new Blob([local as unknown as BlobPart, packageBlob, central as unknown as BlobPart, eocdRecord(1, central.length, centralOffset, count - 1) as unknown as BlobPart]);
 
   const parts: SplitPart[] = [];
   for (let index = 0; index < count; index++) {
+    const start = index === count - 1 ? lastStart : index * partSize;
+    const end = index === count - 1 ? total : Math.min((index + 1) * partSize, lastStart);
     parts.push({
       name: partName(entryName, index, count),
-      blob: whole.slice(index * partSize, Math.min((index + 1) * partSize, total)),
+      blob: whole.slice(start, end),
     });
   }
   return parts;

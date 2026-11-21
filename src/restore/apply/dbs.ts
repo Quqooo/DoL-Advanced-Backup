@@ -1,12 +1,7 @@
 import { nameOfAddr } from '../../core/address';
-import {
-  IMAGE_FILELIST_DB,
-  IMAGE_ORDER_DB,
-  IMAGE_ORDER_KEY,
-  IMAGE_ORDER_STORE,
-  IMAGE_STORE_DB,
-} from '../../core/constants';
+import { IMAGE_ORDER_KEY, IMAGE_ORDER_STORE } from '../../core/constants';
 import { messageError } from '../../core/error';
+import { IMAGE_ORDER_GROUP, imagePackDbGroup } from '../../core/group';
 import { categoryOfGroup } from '../../core/item';
 import { parseJson, stringifyJson } from '../../core/json';
 import { findValueStart, jsonRange, splitElements, textOf, type JsonRange } from '../../core/jsonscan';
@@ -16,14 +11,13 @@ import type { BlobResolver } from '../../pack/graph';
 import { writeAddr } from '../../store/address';
 import { close, getAllWithKeys, openDb, type DbKey } from '../../store/idb';
 import type { DbDump } from '../../store/idb/dump';
+import type { ImagePackLayout } from '../../store/modkeys';
+import { assertWholeDbTarget } from '../../store/whole-db';
 import { sectionDirectory } from '../bundle';
 import { mergeOrderList } from '../merge';
 import { skipsDb } from '../plan';
 import type { DbSection, RestorePlan } from '../types';
 import { bump, fail, picked, type ApplyState } from './state';
-
-/** 图像包（BeautySelectorAddon）的三个库：排序与图片清单都在启动时读一次 */
-const IMAGE_DB_NAMES: ReadonlySet<string> = new Set([IMAGE_ORDER_DB, IMAGE_FILELIST_DB, IMAGE_STORE_DB]);
 
 /**
  * 整库是否整项替换：覆盖与干净恢复要的是「包里那一刻的记录集合」，本机多出来的记录不参与；
@@ -39,13 +33,13 @@ function mergesOrder(mode: RestoreMode): boolean {
 }
 
 /** 本机那条排序记录：读不出来（库/仓/记录不存在，或格式不对）就当没有 */
-async function readLocalOrder(): Promise<string[] | null> {
-  const db = await openDb(IMAGE_ORDER_DB);
+async function readLocalOrder(name: string, store: string, orderKey: string): Promise<string[] | null> {
+  const db = await openDb(name);
   if (!db) return null;
   try {
-    if (!db.objectStoreNames.contains(IMAGE_ORDER_STORE)) return null;
-    const rows = await getAllWithKeys<unknown>(db, IMAGE_ORDER_STORE);
-    const index = rows.keys.findIndex(key => key === IMAGE_ORDER_KEY);
+    if (!db.objectStoreNames.contains(store)) return null;
+    const rows = await getAllWithKeys<unknown>(db, store);
+    const index = rows.keys.findIndex(key => key === orderKey);
     if (index < 0) return null;
     const raw = rows.values[index];
     if (typeof raw !== 'string') return null;
@@ -65,13 +59,17 @@ async function readLocalOrder(): Promise<string[] | null> {
  * 模组自己加载时会丢掉认不出的类型名（`loadSavedOrder` 里 `list.every(T => nn.has(T))` 不成立就重置），
  * 所以这里只需要管顺序：本机在前，包里新出现的追加到末尾。
  */
-async function mergeOrderRecord(section: DbSection): Promise<void> {
-  const store = section.stores.find(entry => entry.name === IMAGE_ORDER_STORE);
-  const record = store?.records.find(entry => entry.key === IMAGE_ORDER_KEY);
-  if (!record || typeof record.value !== 'string') return;
+async function mergeOrderRecord(section: DbSection, layout?: ImagePackLayout): Promise<void> {
+  // 只有当前图库使用宿主别名；旧默认库继续认原仓和键。操作始终使用包内物理库名，不跨库重定向。
+  const active = section.name === layout?.order ? layout : undefined;
+  const store = (active ? section.stores.find(entry => entry.name === active.orderStore) : undefined)
+    ?? section.stores.find(entry => entry.name === IMAGE_ORDER_STORE);
+  const record = (active ? store?.records.find(entry => entry.key === active.orderKey) : undefined)
+    ?? store?.records.find(entry => entry.key === IMAGE_ORDER_KEY);
+  if (!store || !record || typeof record.key !== 'string' || typeof record.value !== 'string') return;
   const packed = parseJson(record.value) as unknown;
   if (!Array.isArray(packed) || !packed.every(item => typeof item === 'string')) return;
-  const local = await readLocalOrder();
+  const local = await readLocalOrder(section.name, store.name, record.key);
   if (!local) return;
   record.value = stringifyJson(mergeOrderList(local, packed as string[]));
 }
@@ -132,8 +130,12 @@ function assertDbSection(section: DbSection, name: string): DbSection {
   if (!section || section.name !== name || !Array.isArray(section.stores)) {
     throw messageError('bundleAddressMismatch');
   }
-  const stores = section.stores.map(store => (store && typeof store.name === 'string' ? store.name : ''));
-  if (stores.includes('') || new Set(stores).size !== stores.length) throw messageError('bundleAddressMismatch');
+  const stores = new Set<string>();
+  for (const store of section.stores) {
+    // IndexedDB permits empty object store names; only missing, non-string or duplicate names are invalid.
+    if (typeof store?.name !== 'string' || stores.has(store.name)) throw messageError('bundleAddressMismatch');
+    stores.add(store.name);
+  }
   return section;
 }
 
@@ -179,14 +181,16 @@ export async function applyDbs(state: ApplyState): Promise<void> {
       continue;
     }
     // 补缺：库在就整库跳过，不去补几条记录。图像包排序例外——它要按数组合并
-    const orderMerge = name === IMAGE_ORDER_DB && mergesOrder(state.plan.mode);
+    const group = imagePackDbGroup(name, state.plan.imagePacks);
+    const orderMerge = group === IMAGE_ORDER_GROUP && mergesOrder(state.plan.mode);
     if (state.plan.mode === 'missing' && state.dbNames.has(name) && !orderMerge) {
       bump(state.report, item, 'skipped');
       continue;
     }
     const section = await sectionOf(name);
-    if (orderMerge) await mergeOrderRecord(section);
     try {
+      assertWholeDbTarget(name);
+      if (orderMerge) await mergeOrderRecord(section, state.plan.imagePacks);
       const outcome = await writeAddr(
         item.addr,
         { form: 'db', value: decodeDbInPlace(section, state.resolve, state.format) },
@@ -203,7 +207,7 @@ export async function applyDbs(state: ApplyState): Promise<void> {
         continue;
       }
       // 图像包的三个库在启动时读一次：写完不重载，启用 / 禁用与清单都不会变
-      if (IMAGE_DB_NAMES.has(name)) state.report.needsReload = true;
+      if (group !== null) state.report.needsReload = true;
       state.writtenDbs.add(name);
       bump(state.report, item, 'applied');
     } catch (error) {

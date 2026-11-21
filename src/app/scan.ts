@@ -3,8 +3,9 @@ import { nameOfAddr } from '../core/address';
 import { makeGroupContext } from '../core/group';
 import { claimedAddrs, mergeRetried, type Item, type ScanResult } from '../core/item';
 import { currentOrigin } from '../host/env';
-import { dbName } from '../host/game';
+import { dbName, dbNameReady } from '../host/game';
 import { estimateDatabase, measureDatabase } from '../store/idb/dump';
+import { imagePackKeys } from '../store/modkeys';
 import { useGameDb } from '../store/saves';
 import { session } from './session';
 
@@ -53,7 +54,7 @@ export function scanBusy(): boolean {
  */
 export async function scan(force = false, onBatch?: ScanBatch): Promise<ScanResult> {
   // 游戏可能用 `idb.init(name)` 换过库名：每次扫描前对一次，store 不必自己碰宿主
-  useGameDb(dbName());
+  useGameDb(dbName(), dbNameReady());
   const state = session();
   if (force) state.scanGeneration++;
   if (!force && state.scan) {
@@ -127,7 +128,7 @@ export async function retryCollector(name: string): Promise<ScanResult | null> {
   };
 
   try {
-    const ctx = contextOf(claimedAddrs(next), makeGroupContext(currentOrigin()));
+    const ctx = contextOf(claimedAddrs(next), makeGroupContext(currentOrigin(), undefined, imagePackKeys()));
     if (name === 'other') {
       // `other` 组不产出认领，重跑只需重新计算一次差集
       next.items.push(...(await collectLeftover(ctx)));

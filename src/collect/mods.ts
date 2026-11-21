@@ -1,14 +1,15 @@
 import { lsAddr, modAddr } from '../core/address';
 import { modMatches, readBootMeta, type BootMeta } from '../core/bootmeta';
+import { SELF_NAME } from '../core/constants';
 import { base64ByteLength } from '../core/format';
 import { groupOfKnown } from '../core/group';
 import type { Item, ItemFlags } from '../core/item';
-import { selfEntry } from '../core/mapping';
 import { injectedModName } from '../core/naming';
 import { injectedValues } from '../host/modloader';
 import {
   localModKeys,
   openModReader,
+  type ModReader,
   type ModValue,
 } from '../store/mods';
 import { publishBootMetas } from './bootmetas';
@@ -18,25 +19,52 @@ function bytesOf(value: ModValue): number {
   return typeof value === 'string' ? base64ByteLength(value) : value.byteLength;
 }
 
-function flagsOf(isSelf: boolean, injected: boolean, disabled = false): ItemFlags | undefined {
-  if (!isSelf && !injected && !disabled) return undefined;
+function flagsOf(isSelf: boolean, injected: boolean, disabled = false, unknown = false): ItemFlags | undefined {
+  if (!isSelf && !injected && !disabled && !unknown) return undefined;
   return {
     ...(isSelf ? { self: true } : {}),
+    ...(unknown ? { modIdentityUnknown: true } : {}),
     ...(injected ? { injected: true } : {}),
     ...(disabled ? { disabled: true } : {}),
   };
 }
 
+/** 显示仍取占优副本；删除身份必须检查两层。每层只读一次，不保留包本体。 */
+export async function inspectModLayers(
+  reader: ModReader | null, name: string, present: { idb: boolean; local: boolean },
+): Promise<{ meta: BootMeta | null; bytes?: number; self: boolean; unknown: boolean }> {
+  let meta: BootMeta | null = null;
+  let bytes: number | undefined;
+  let self = false;
+  let unknown = !present.idb && !present.local;
+  for (const layer of ['idb', 'local'] as const) {
+    if (!present[layer]) continue;
+    try {
+      const value = await reader?.readLayer(layer, name);
+      const layerMeta = value === undefined ? null : await readBootMeta(value);
+      self ||= modMatches(SELF_NAME, layerMeta);
+      unknown ||= !layerMeta?.name;
+      if (bytes === undefined && value !== undefined) {
+        bytes = bytesOf(value);
+        meta = layerMeta;
+      }
+    } catch {
+      unknown = true;
+    }
+  }
+  return { meta, ...(bytes === undefined ? {} : { bytes }), self, unknown };
+}
+
 export const modsCollector: Collector = {
   name: 'mods',
   async collect(ctx: CollectContext): Promise<CollectResult> {
-    // 名字与两份列表都可在本轮内复用，模组本体只读占优的存储副本。
+    // 名字与两份列表都可在本轮内复用。
     const { local, idb } = await ctx.modNames();
     const idbNames = new Set(idb);
     const localNames = new Set(local);
     const lists = await ctx.modLists();
 
-    // 同名时 IndexedDB 后加载、以它为准；localStorage 只作溯源
+    // 同名时 IndexedDB 后加载，展示信息与导出仍以它为准
     const loadOrder = new Map(lists.enabled.map((name, index) => [name, index]));
     // 禁用列表只针对 IndexedDB 层：包在、但重载时不会被加载
     const hidden = new Set(lists.hidden);
@@ -46,22 +74,17 @@ export const modsCollector: Collector = {
       return a === b ? left.localeCompare(right) : a - b;
     });
 
-    const self = selfEntry();
-    const selfPattern = self ? self.mod : null;
     const items: Item[] = [];
     const metas = new Map<string, BootMeta>();
     // 一个连接、逐条取：每条读完只留下元信息与字节数，值本身不驻留
     const reader = names.length > 0 ? await openModReader({ idb: idbNames.size > 0 }) : null;
     try {
       for (const [position, name] of names.entries()) {
-        let value = idbNames.has(name) ? await reader?.readLayer('idb', name) : undefined;
-        if (value === undefined && localNames.has(name)) value = await reader?.readLayer('local', name);
-        if (value === undefined) continue;
-        const meta = await readBootMeta(value);
+        const { meta, bytes, self, unknown } = await inspectModLayers(reader, name, {
+          idb: idbNames.has(name), local: localNames.has(name),
+        });
         if (meta) metas.set(name, meta);
-        // 自我识别只看 boot.json 的 name 与 alias，文件名带不带版本号都不影响
-        const isSelf = selfPattern ? modMatches(selfPattern, meta) : false;
-        const flags = flagsOf(isSelf, false, hidden.has(name));
+        const flags = flagsOf(self, false, hidden.has(name), unknown);
         const addr = modAddr(name);
         items.push({
           addr,
@@ -70,7 +93,7 @@ export const modsCollector: Collector = {
           ...(meta?.name ? { label: meta.name } : {}),
           ...(meta?.version ? { version: meta.version } : {}),
           ...(meta?.nickName ? { nick: meta.nickName } : {}),
-          bytes: bytesOf(value),
+          ...(bytes === undefined ? {} : { bytes }),
           order: position,
           ...(flags ? { flags } : {}),
         });
@@ -90,7 +113,7 @@ export const modsCollector: Collector = {
       if (taken.has(stored)) continue;
       taken.add(stored);
       if (meta) metas.set(stored, meta);
-      const isSelf = selfPattern ? modMatches(selfPattern, meta) : false;
+      const isSelf = modMatches(SELF_NAME, meta);
       const flags = flagsOf(isSelf, true);
       const addr = modAddr(stored);
       items.push({

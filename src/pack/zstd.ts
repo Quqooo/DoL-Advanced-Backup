@@ -1,5 +1,6 @@
 import { compress, decompress, init } from '@bokuweb/zstd-wasm';
 import { inflateSync } from 'fflate';
+import { DecodeOutputLimit } from '../core/deflate';
 import { messageError } from '../core/error';
 import { base64ToBytes } from '../core/format';
 import wasmBase64 from 'virtual:zstd-wasm';
@@ -41,7 +42,42 @@ export async function zstdCompress(bytes: Uint8Array, level?: number): Promise<U
   return compress(bytes, level ?? (bytes.length >= BIG_SECTION ? 3 : 9));
 }
 
-export async function zstdDecompress(bytes: Uint8Array): Promise<Uint8Array> {
+/**
+ * wasm 的 defaultHeapSize 仅对未声明内容大小的 frame 生效；有声明时它按 frame 分配。
+ * 先读标准 frame 的大小字段（RFC 8878 §3.1.1.4），两种情况才都有目的缓冲上限。
+ */
+function frameSize(bytes: Uint8Array): number | null {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes.length < 5 || view.getUint32(0, true) !== 0xfd2fb528) throw new Error('invalid ZSTD frame');
+  const header = bytes[4];
+  const singleSegment = (header & 0x20) !== 0;
+  const flag = header >>> 6;
+  if (flag === 0 && !singleSegment) return null;
+  const dictBytes = [0, 1, 2, 4][header & 3];
+  const offset = 5 + (singleSegment ? 0 : 1) + dictBytes;
+  if (flag === 0) return view.getUint8(offset);
+  if (flag === 1) return view.getUint16(offset, true) + 256;
+  if (flag === 2) return view.getUint32(offset, true);
+  return Number(view.getBigUint64(offset, true)); // 超安全整数也远大于条目预算
+}
+
+export async function zstdDecompress(bytes: Uint8Array, limit?: number): Promise<Uint8Array> {
+  if (limit === undefined) {
+    await ensure();
+    return decompress(bytes);
+  }
+  const size = frameSize(bytes);
+  if (size !== null && size > limit) throw new DecodeOutputLimit(limit);
   await ensure();
-  return decompress(bytes);
+  try {
+    // ZSTD_decompress 的 dstCapacity 包含整个调用的输出（包括串联 frame）。
+    // 不直接信任 defaultHeapSize：有 frame 内容大小时包内部仍会忽略它。
+    return decompress(bytes, { defaultHeapSize: limit });
+  } catch (error) {
+    // 0.0.27 的固定包装错误；ZSTD_error_dstSize_tooSmall = 70。
+    if (error instanceof Error && error.message === 'Failed to compress with code -70') {
+      throw new DecodeOutputLimit(limit);
+    }
+    throw error;
+  }
 }

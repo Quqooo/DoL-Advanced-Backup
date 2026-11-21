@@ -1,10 +1,10 @@
 import { SNAP_DB } from '../core/constants';
 import { ownersOf } from '../core/mapping';
-import { dbName } from '../host/game';
+import { dbName, dbNameReady, waitForDbName } from '../host/game';
 import { loadedModNames } from '../host/modloader';
 import { close, countRecords, databaseExists, deleteDatabase, openDb } from '../store/idb';
-import { clearPendingDrop, isProtectedDb, readPendingDrop } from '../store/pending-drop';
-import { useGameDb } from '../store/saves';
+import { clearPendingDrop, readPendingDrop } from '../store/pending-drop';
+import { wholeDbGuard } from '../store/whole-db';
 
 /**
  * 真正删掉干净恢复留下的空库。
@@ -19,7 +19,7 @@ import { useGameDb } from '../store/saves';
  *   只取第一条会把还在用的库当成无主的。快照库例外：它永远归属本模组，能进标记本身就是
  *   干净恢复时关掉了「保留本模组」的明确同意，按归属判据就永远删不掉；
  * - 库必须还在：`indexedDB.databases()` 里查不到就没有可删的东西；
- * - 库里必须一条记录都没有：标记记的是「将要清空」，清空失败时记录还在，复查覆盖这一步。
+ * - 库里必须一条记录都没有：镜像完成后到重载前，宿主可能重新写入数据。
  *
  * 拿不到已加载模组名、或拿不到库列表时整体放弃：那一刻「没有人在用」是假象。
  * 无论走到哪一步，结束都清空标记——重试没有意义（库可能被别的标签页占着），堆积只会让每次启动多读一遍。
@@ -27,17 +27,18 @@ import { useGameDb } from '../store/saves';
 export async function dropPendingEmptyDbs(): Promise<void> {
   const pending = readPendingDrop();
   if (pending.length === 0) return;
-  // 库名取宿主当前值：`idb.init` 尚未跑时 `dbName()` 退回默认名，而游戏库本来就不会进标记，
-  // 保护名单与写入侧在两种时机下都指向同一个名字
-  useGameDb(dbName());
   try {
+    // 加载结束时游戏可能尚未设定库名，旧版本留下的标记不能证明目标安全。
+    if (!dbNameReady()) await waitForDbName();
+    if (!dbNameReady()) return;
+    const issue = wholeDbGuard(dbName());
     const loaded = loadedModNames();
     if (!loaded) return;
     const live = new Set(loaded);
 
     for (const name of pending) {
       try {
-        if (isProtectedDb(name)) continue;
+        if (issue(name)) continue;
         // 快照库是本模组自己的库：归属判据永远把它算成「有人在用」，而它能进标记只有一条路——
         // 干净恢复时关掉了「保留本模组」。那份标记就是用户的明确同意，不再按归属拦。
         if (name !== SNAP_DB) {
@@ -55,7 +56,7 @@ export async function dropPendingEmptyDbs(): Promise<void> {
         } finally {
           close(db);
         }
-        if (total > 0) continue;
+        if (total > 0 || !dbNameReady() || wholeDbGuard(dbName())(name)) continue;
         await deleteDatabase(name);
       } catch (error) {
         console.warn(`[AdvancedBackup] 清理空库 ${name} 失败`, error);

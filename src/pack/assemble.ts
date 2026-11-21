@@ -7,11 +7,13 @@ import { RESTORE_MOD_NAME, SELF_PACK_INNER } from '../core/constants';
 import { base64ToBytes, formatCompactStamp, hex32 } from '../core/format';
 import { stringifyJson } from '../core/json';
 import { createManifest, type ManifestSection } from '../core/manifest';
+import { openingEntryLimits, OPEN_LIMITS, packageIndexCount } from '../core/package-budget';
 import { injectedModName } from '../core/naming';
 import { writeModPackTo } from '../core/modpack';
 import type { ProgressPhase } from '../core/progress';
 import { concatChunks, type ByteSink } from '../core/sink';
 import { injectedValues } from '../host/modloader';
+import { imagePackKeys } from '../store/modkeys';
 import { openModReader } from '../store/mods';
 import { BlobTable } from './blob';
 import { encodeChunks, encodeEntry, encodeStream } from './codec';
@@ -32,11 +34,10 @@ const EMPTY = new Uint8Array(0);
 /**
  * 包内出现的模组数据所属的映射条目。
  *
- * 恢复页用本地映射给地址分组：目标机器没装那个模组、或它没有注册映射时，这些数据会落到
- * 「其他」。包内带一份最小表，读包前先装上，分组与显示名才对得上。
+ * 目标没有对应映射时，包预览用这份最小表恢复分组和显示名。本机扫描仍使用本机映射。
  */
 export function mappingEntriesOf(selected: ReadonlySet<string>): MappingEntry[] {
-  const ctx = { mapping: mappingList() };
+  const ctx = { mapping: mappingList(), imagePackDbs: imagePackKeys() };
   const mods = new Set<string>();
   for (const addr of selected) {
     const group = groupOf(addr, ctx);
@@ -91,7 +92,10 @@ export async function packTo(
     onSection: async task => {
       throwIfAborted(hooks.signal);
       // 分区的字节直接进压缩流：小分区一次写完，整库分区边翻页边写
+      const limits = openingEntryLimits(task.file);
       const encoded = await encodeStream(task.write, { compression: options.compression });
+      if (limits && encoded.size > limits.output) throw messageError('bundleOpenBudget', task.file, 'output', limits.output);
+      if (limits && encoded.comp > limits.input) throw messageError('bundleOpenBudget', task.file, 'input', limits.input);
       sectionEntries.push({
         name: task.file,
         // 分区结果合并成一条：逐块保留不降峰值，散块反而更容易留下碎片
@@ -178,9 +182,11 @@ export async function packTo(
       manifest.blobs.push({ sha256: packed.digest, file: packed.file, bytes: packed.bytes });
     }
 
+    if (packageIndexCount(manifest) > OPEN_LIMITS.indexEntries) {
+      throw messageError('bundleOpenBudget', 'manifest.json', 'indexEntries', OPEN_LIMITS.indexEntries);
+    }
     const encoder = new TextEncoder();
-    // 包内出现的模组数据所属的映射条目：恢复页按本地映射建树，缺了这些条目
-    // 分组会落到「其他」，显示名也退成模组名
+    // 只写这次所选模组数据需要的映射，供包预览使用。
     const mappingEntries = mappingEntriesOf(selected);
     const head: PendingItem[] = [
       { name: 'manifest.json', bytes: encoder.encode(stringifyJson(manifest, null, 2)), deflate: true },
@@ -216,6 +222,8 @@ export async function packTo(
     const encodeInto = async (item: PendingItem): Promise<void> => {
       throwIfAborted(hooks.signal);
       emit('encode', encodeRatio(doneBytes), item.name);
+      const limits = openingEntryLimits(item.name);
+      if (limits && item.bytes.length > limits.output) throw messageError('bundleOpenBudget', item.name, 'output', limits.output);
       const encoded = item.deflate
         ? await encodeEntry(
             item.bytes,
@@ -223,6 +231,7 @@ export async function packTo(
             fed => emit('encode', encodeRatio(doneBytes + fed), item.name),
           )
         : { data: item.bytes, method: 0 as const };
+      if (limits && encoded.data.length > limits.input) throw messageError('bundleOpenBudget', item.name, 'input', limits.input);
       const bytes = item.bytes.length;
       entries.push({
         name: item.name,
@@ -272,7 +281,7 @@ export async function packTo(
     const total = zipPlanSize([
       ...entries.map(entry => ({ name: entry.name, comp: payloadLength(entry.data) })),
       ...planned.plans.map((plan: ModPlan) => ({ name: plan.file, comp: plan.bytes })),
-    ]);
+    ], OPEN_LIMITS);
     const report = (written: number): void =>
       emit('assemble', ENCODE_END + (1 - ENCODE_END) * (total > 0 ? Math.min(1, written / total) : 1));
 

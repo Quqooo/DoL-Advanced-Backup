@@ -2,7 +2,7 @@ import type { MessageError } from '../../core/error';
 import { categoryOfGroup, type Item } from '../../core/item';
 import type { Category } from '../../core/types';
 import type { BlobResolver } from '../../pack/encode';
-import type { RestoreMirror } from '../plan/mirror';
+import type { FrozenRestoreMirror } from '../plan/mirror';
 import type { RestorePlan, RestoreReport, RestoreWarning } from '../types';
 
 export interface ApplyInput {
@@ -13,10 +13,10 @@ export interface ApplyInput {
   /** 干净恢复下本模组及其数据是否豁免删除；缺省豁免 */
   keepSelf?: boolean;
   /** 正常入口传入同一份用于确认的候选；直接调用时按计划计算。 */
-  mirror?: RestoreMirror;
+  mirror?: FrozenRestoreMirror;
   /** 0..1 覆盖载入数据块与全部写入；`label` 是当前步骤 */
   onProgress?: (progress: { ratio: number; label?: string }) => void;
-  /** 只在阶段边界生效：一类数据要么写完，要么不写，避免半套状态 */
+  /** 在写入步骤和每项镜像删除之间生效；不打断已经开始的事务。 */
   signal?: AbortSignal;
 }
 
@@ -24,6 +24,7 @@ export interface ApplyState {
   plan: RestorePlan;
   selected: ReadonlySet<string>;
   selfPack: boolean;
+  signal?: AbortSignal;
   /** 包格式：1 与 2 用不同的值解码器 */
   format: 1 | 2;
   resolve: BlobResolver;
@@ -31,10 +32,7 @@ export interface ApplyState {
   /** 本机已有的库名，判「库在就跳过」用 */
   dbNames: Set<string>;
   /**
-   * 干净恢复这次会删掉的模组（存储名）。
-   *
-   * 镜像排在列表写入之后：若不先将它们从「已安装」中移除，写入的顺序列表会保留
-   * 一批已经不存在的模组名。
+   * 镜像可能卸载的模组（含冻结失败的候选）。镜像执行之前保留其原有启用/禁用意图。
    */
   droppedMods: ReadonlySet<string>;
   /**

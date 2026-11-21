@@ -1,19 +1,25 @@
 import { hex32 } from '../core/format';
+import { openingEntryLimits, OPEN_LIMITS, packageIndexCount, type OpenBundleLimits } from '../core/package-budget';
+import { tryInflateRawBounded } from '../core/deflate';
+import { zstdDecompress } from '../pack/zstd';
 import { SELF_PACK_INNER } from '../core/constants';
 import { MessageError, type MessageParam } from '../core/error';
 import { parseJson } from '../core/json';
 import { parseManifest, type Manifest, type ManifestSection } from '../core/manifest';
 import { hasModPackMagic, modPackEntryRange, readModPackLayoutFrom } from '../core/modpack';
 import { decodeEntry } from '../pack/codec';
-import { blobSource, bytesSource, openZip, sliceSource, Zip64Unsupported, ZipEntryCorrupt, type ZipSource } from '../core/zipread';
+import {
+  blobSource, bytesSource, openZip, sliceSource, Zip64Unsupported, ZipBudgetExceeded, ZipEntryCorrupt,
+  type EntryDecoder, type ZipSource,
+} from '../core/zipread';
 
-export type BundleErrorCode = 'zip' | 'manifest' | 'entry' | 'json' | 'verify';
+export type BundleErrorCode = 'zip' | 'manifest' | 'entry' | 'json' | 'verify' | 'budget';
 
 /**
  * 读包失败：分类码 + 词条键。
  *
  * `code` 回答「哪一类失败」（调用方与单测按它判），`id`/`params` 回答「给玩家看哪句话」。
- * 两者不合并：同一个分类下的文案会各自带参数（文件名、条数），而分类只有五个。
+ * 两者不合并：同一个分类下的文案会各自带参数（文件名、条数），而分类保持稳定。
  */
 export class BundleError extends MessageError {
   constructor(readonly code: BundleErrorCode, id: string, ...params: MessageParam[]) {
@@ -38,6 +44,49 @@ export interface Bundle {
 }
 
 const decoder = new TextDecoder();
+
+/** 开包限额不适用于按需读取的大分区。JSON 大小与建树索引条数单独限制。 */
+export { openingEntryLimits };
+export type { OpenBundleLimits };
+
+export function openLimits(overrides?: Partial<OpenBundleLimits>): OpenBundleLimits {
+  const limits = { ...OPEN_LIMITS, ...overrides };
+  for (const value of Object.values(limits)) {
+    if (!Number.isSafeInteger(value) || value < 0) throw new RangeError('invalid opening budget');
+  }
+  return limits;
+}
+
+export class BundleBudgetExceeded extends BundleError {
+  constructor(readonly subject: string, readonly kind: string, readonly limit: number) {
+    super('budget', 'bundleOpenBudget', subject, kind, limit);
+  }
+}
+
+export const decodeOpeningEntry: EntryDecoder = async (data, method, size) => {
+  if (method === 0) return data;
+  if (method === 8) return tryInflateRawBounded(data, size);
+  if (method === 93) return zstdDecompress(data, size);
+  return null;
+};
+
+/**
+ * 映射参与建树，打开包时就做资源检查；坏映射照旧留给调用方作为“没有映射”处理。
+ * 小条目已经解过，后续读复用结果，不为预算重复解压。
+ */
+export async function preloadMapping(
+  names: ReadonlySet<string>, read: (path: string) => Promise<Uint8Array>,
+): Promise<(path: string) => Promise<Uint8Array>> {
+  const path = 'mapping.json';
+  if (!names.has(path)) return read;
+  try {
+    const bytes = await read(path);
+    return name => name === path ? Promise.resolve(bytes.slice()) : read(name);
+  } catch (error) {
+    if (error instanceof BundleBudgetExceeded) throw error;
+    return name => name === path ? Promise.reject(error) : read(name);
+  }
+}
 
 /**
  * 由「条目名集合 + 读取函数」造 Bundle：两种来源只有这两处不同。
@@ -71,6 +120,23 @@ export const MANIFEST_IDS: Record<string, string> = {
   newer: 'bundleNewer',
   shape: 'bundleShape',
 };
+
+/** 字节已受限；再限制清单条数，切断校验循环和建树的独立扇出。 */
+export function parseBundleManifest(raw: Uint8Array, limits: OpenBundleLimits): Manifest {
+  let parsed: unknown;
+  try {
+    parsed = parseJson(decoder.decode(raw));
+  } catch {
+    fail('json', 'bundleManifestJson');
+  }
+  if (packageIndexCount(parsed) > limits.indexEntries) {
+    throw new BundleBudgetExceeded('manifest.json', 'indexEntries', limits.indexEntries);
+  }
+  const result = parseManifest(parsed);
+  if (!result.ok) fail('manifest', MANIFEST_IDS[result.error] ?? result.error);
+  verifyIndex(result.manifest);
+  return result.manifest;
+}
 
 const fixedSectionPaths = new Map([
   ['keys', 'keys.json'], ['saves', 'saves.json'], ['mods', 'mods.json'], ['idb', 'idb.json'],
@@ -212,76 +278,68 @@ export function verifyEntries(
  * 套了 ModPack 容器的自恢复包同样按需读：容器把内层 zip 原样存成一段连续字节，
  * 块表给出起点与长度，切出来就是一个普通 zip 来源。
  */
-export async function openBundle(source: Uint8Array | Blob): Promise<Bundle> {
+export async function openBundle(source: Uint8Array | Blob, overrides?: Partial<OpenBundleLimits>): Promise<Bundle> {
+  const limits = openLimits(overrides);
   let zipSource: ZipSource = source instanceof Uint8Array ? bytesSource(source) : blobSource(source);
 
   // 只读头部判容器：普通 zip 在这里只多读 32 字节
   if (hasModPackMagic(await zipSource.read(0, 32))) {
-    const layout = await readModPackLayoutFrom(zipSource);
+    const container = zipSource;
+    const layout = await readModPackLayoutFrom({
+      size: container.size,
+      read(start, end) {
+        // 容器 API 先读固定头，再读 BSON 元数据；内层 zip 仍直接切原始来源。
+        if (start !== 0 && end - start > limits.containerMetadataBytes) {
+          throw new BundleBudgetExceeded('ModPack', 'containerMetadataBytes', limits.containerMetadataBytes);
+        }
+        return container.read(start, end);
+      },
+    });
     if (!layout) fail('zip', 'bundleModpackMeta');
     const inner = modPackEntryRange(layout, SELF_PACK_INNER, zipSource.size);
     if (!inner) fail('zip', 'bundleModpackInner', SELF_PACK_INNER);
     zipSource = sliceSource(zipSource, inner.start, inner.length);
   }
 
-  const zip = await openZip(zipSource).catch(error => {
+  const zip = await openZip(zipSource, limits).catch(error => {
     if (error instanceof Zip64Unsupported) fail('zip', 'bundleZip64');
+    if (error instanceof ZipBudgetExceeded) throw new BundleBudgetExceeded(error.subject, error.kind, error.limit);
     throw error;
   });
-  if (zip.entries.length === 0) fail('zip', 'bundleNotZip');
   const names = new Set(zip.entries.map(entry => entry.name));
+  if (names.size === 0 || names.size !== zip.entries.length) fail('zip', 'bundleNotZip');
   if (!names.has('manifest.json')) fail('manifest', 'bundleNoManifest');
 
-  let raw: Uint8Array | null;
-  try {
-    raw = await zip.read('manifest.json', decodeEntry);
-  } catch (error) {
-    if (error instanceof ZipEntryCorrupt) fail('verify', 'bundleCrcMismatch', 'manifest.json');
-    throw error;
-  }
-  if (!raw) fail('manifest', 'bundleManifestUnreadable');
-
-  let parsed: unknown;
-  try {
-    parsed = parseJson(decoder.decode(raw));
-  } catch {
-    fail('json', 'bundleManifestJson');
-  }
-  const result = parseManifest(parsed);
-  if (!result.ok) fail('manifest', MANIFEST_IDS[result.error] ?? result.error);
-  const manifest = result.manifest;
-  verifyIndex(manifest);
-  const byName = new Map(zip.entries.map(entry => [entry.name, entry]));
-  verifyEntries(manifest, file => {
-    const entry = byName.get(file);
-    return entry ? { size: entry.size, crc: entry.crc } : undefined;
-  });
-
-  /**
-   * v1/v2 的 `idb.json` 一次恢复会被骨架、预检、写入三处读；它可能有上百 MB，
-   * 每处都解一遍既费时间又反复占内存。只缓存这一份，其余条目照旧按需读。
-   *
-   * v3 的整库是每个库一条 `idb/<库名>.json`：缓存它们等于把整库重新压在内存里，
-   * 恢复侧按「读一个库、用完即弃」处理，这里不缓存。
-   */
-  let idbBytes: Uint8Array | null = null;
-
-  const read = async (path: string): Promise<Uint8Array> => {
-    if (path === 'idb.json' && idbBytes) return idbBytes;
-    let data: Uint8Array | null;
+  const readZip = async (path: string): Promise<Uint8Array | null> => {
+    const entryLimits = openingEntryLimits(path, limits);
     try {
-      data = await zip.read(path, decodeEntry);
+      return await zip.read(path, entryLimits ? decodeOpeningEntry : decodeEntry, entryLimits);
     } catch (error) {
-      // 条目内容与中央目录登记的 CRC 不符：包被改过或传坏了，不能当「缺文件」处理
+      if (error instanceof ZipBudgetExceeded) throw new BundleBudgetExceeded(error.subject, error.kind, error.limit);
       if (error instanceof ZipEntryCorrupt) fail('verify', 'bundleCrcMismatch', path);
       throw error;
     }
+  };
+
+  const raw = await readZip('manifest.json');
+  if (!raw) fail('manifest', 'bundleManifestUnreadable');
+  const manifest = parseBundleManifest(raw, limits);
+  verifyEntries(manifest, zip.get);
+
+  /**
+   * v1/v2 的 idb.json 只缓存这一份。v3 按库逐条读，不能把所有库一并压在内存里。
+   */
+  let idbBytes: Uint8Array | null = null;
+  const read = async (path: string): Promise<Uint8Array> => {
+    if (path === 'manifest.json') return raw.slice();
+    if (path === 'idb.json' && idbBytes) return idbBytes;
+    const data = await readZip(path);
     if (!data) fail('entry', 'bundleMissingEntry', path);
     if (path === 'idb.json') idbBytes = data;
     return data;
   };
 
-  return { ...bundleOf(manifest, names, read), releaseLegacyIdb: () => { idbBytes = null; } };
+  return { ...bundleOf(manifest, names, await preloadMapping(names, read)), releaseLegacyIdb: () => { idbBytes = null; } };
 }
 
 /**

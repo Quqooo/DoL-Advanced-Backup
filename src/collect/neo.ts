@@ -9,6 +9,7 @@ import {
 import type { Item } from '../core/item';
 import { databases } from '../store/idb';
 import { COARSE_MEASURE_BUDGET, measureDatabase } from '../store/idb/dump';
+import { wholeDbGuard } from '../store/whole-db';
 import { measuredDbItem } from './dbitem';
 import { keyItem } from './keylist';
 import type { CollectContext, Collector, CollectResult } from './index';
@@ -40,7 +41,7 @@ export const neoCollector: Collector = {
     }
 
     const present = new Set((await databases()).map(item => item.name));
-    if (present.has(NEO_CACHE_DB)) {
+    if (present.has(NEO_CACHE_DB) && !wholeDbGuard()(NEO_CACHE_DB)) {
       const measure = await measureDatabase(NEO_CACHE_DB, COARSE_MEASURE_BUDGET);
       items.push(measuredDbItem(idbAddr(NEO_CACHE_DB), ctx, measure, { order: ORDER.cache }));
     }

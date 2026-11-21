@@ -1,12 +1,18 @@
-import { MOD_HIDDEN_ADDR, MOD_ORDER_ADDR, nameOfAddr } from '../core/address';
-import { messageError } from '../core/error';
+import { MOD_HIDDEN_ADDR, MOD_ORDER_ADDR, nameOfAddr, parseAddr } from '../core/address';
+import { modMatches, readBootMeta } from '../core/bootmeta';
+import { SELF_NAME } from '../core/constants';
+import { messageError, throwIfAborted } from '../core/error';
+import { base64ToBytes } from '../core/format';
 import type { DeleteResult } from '../core/types';
 import { matches, selfEntry } from '../core/mapping';
 import { isNewer } from '../core/version';
 import { loaderVersion } from '../host/env';
 import { addMod, hasApi, overwriteHidden, overwriteOrder, removeMod, removeModLocal } from '../host/modloader';
+import { sha256Hex } from '../pack/blob';
 import { writeAddr } from '../store/address';
-import { deleteModValue, hasModValue, modValueFor } from '../store/mods';
+import { close, deleteByKeys, openDb, request } from '../store/idb';
+import { confirmedModDb } from '../store/modkeys';
+import { modKeys, modValueFor, type ModValue } from '../store/mods';
 
 /**
  * 模组不是「写一个键」，是安装：值类型要按目标库现有条目判，写错会导致 ModLoader 读不出包。
@@ -50,20 +56,168 @@ export function keepInstalled(list: readonly string[], present: ReadonlySet<stri
   return list.filter(name => present.has(name));
 }
 
-/** 两层一起删除：只删一层会留下同名副本，重载后重新出现 */
-export async function uninstallMod(addr: string): Promise<DeleteResult> {
-  const stored = nameOfAddr(addr);
-  if (stored === null) return { status: 'failed', error: messageError('addrInvalid', addr) };
+type ModLayer = 'idb' | 'local';
+const MOD_LAYERS = ['idb', 'local'] as const;
+
+export interface FrozenModRemoval {
+  readonly addr: string;
+  readonly target: string;
+  /** null 表示已确认该层无副本，不可将其加入删除。 */
+  readonly hashes: Readonly<Record<ModLayer, string | null>>;
+}
+
+/** 回退扫描可能把物理 LS 包键列为普通键；镜像必须经由逻辑模组地址卸载。 */
+export function isLocalModPackageKey(key: string): boolean {
+  const config = modKeys();
+  return key !== config.localList && key.startsWith(config.localPrefix);
+}
+
+async function removalReader() {
+  const keys = modKeys();
+  if (confirmedModDb() !== keys.db) throw messageError('hostDbUnknown', 'ModLoader');
+  const target = JSON.stringify(keys);
+  const db = await openDb(keys.db);
+  const storageKeys = (name: string) => {
+    const idb = keys.prefix + name;
+    const local = keys.localPrefix + name;
+    if (idb === keys.list || idb === keys.hidden || local === keys.localList) throw messageError('deleteFailed');
+    return { idb, local };
+  };
+  const readLocal = (name: string) => window.localStorage.getItem(storageKeys(name).local);
+  return {
+    target,
+    readLocal,
+    async read(layer: ModLayer, name: string): Promise<ModValue | null> {
+      if (layer === 'local') return readLocal(name);
+      const key = storageKeys(name).idb;
+      if (!db) return null;
+      const store = db.transaction(keys.store, 'readonly').objectStore(keys.store);
+      const value: unknown = await request(store.get(key));
+      if (typeof value === 'string' || value instanceof Uint8Array) return value;
+      if (value === undefined && (await request(store.getKey(key))) === undefined) return null;
+      // 包键还在但值读不懂；不能当成空层。
+      throw messageError('deleteFailed');
+    },
+    async remove(layer: ModLayer, name: string): Promise<void> {
+      const address = storageKeys(name);
+      // 用于复核的存储布局也必须是控制器卸载时正在使用的布局。
+      if (JSON.stringify(modKeys()) !== target) throw messageError('deleteFailed');
+      if (layer === 'idb') {
+        if (hasApi('removeModIndexDB')) await removeMod(name);
+        else if (db) await deleteByKeys(db, keys.store, [address.idb]);
+      } else if (hasApi('removeModLocalStorage')) await removeModLocal(name);
+      else window.localStorage.removeItem(address.local);
+    },
+    close: () => close(db),
+  };
+}
+
+type RemovalReader = Awaited<ReturnType<typeof removalReader>>;
+
+async function fingerprint(value: ModValue): Promise<string> {
+  if (typeof value !== 'string') return 'bytes:' + await sha256Hex(value);
+  // 同一存储表示的整包 SHA-256，不用 boot 名、版本、大小或 CRC 作为内容身份。
+  let bytes: Uint8Array;
   try {
-    // 控制器的返回值只说明「这次调用没抛错」，不代表真有东西可删；计数要看存储里的实际状态
-    const existed = await hasModValue(stored);
-    if (hasApi('removeModIndexDB')) {
-      await removeMod(stored);
-      await removeModLocal(stored);
-      if (await hasModValue(stored)) return { status: 'failed', error: messageError('deleteFailed') };
-      return existed ? { status: 'deleted' } : { status: 'absent' };
+    bytes = base64ToBytes(value);
+  } catch {
+    return 'text:' + await sha256Hex(new TextEncoder().encode(value));
+  }
+  return 'base64:' + await sha256Hex(bytes);
+}
+
+export interface FrozenModRemovals {
+  removals: ReadonlyMap<string, FrozenModRemoval>;
+  failures: ReadonlyMap<string, unknown>;
+}
+
+/** 只冻结执行扫描差集里的候选。在确认前，重新验证其两层内容与 keepSelf。 */
+export async function freezeModRemovals(
+  addrs: readonly string[], keepSelf: boolean, signal?: AbortSignal,
+): Promise<FrozenModRemovals> {
+  const removals = new Map<string, FrozenModRemoval>();
+  const failures = new Map<string, unknown>();
+  throwIfAborted(signal);
+  if (addrs.length === 0) return { removals, failures };
+  let reader: RemovalReader;
+  try {
+    reader = await removalReader();
+  } catch (error) {
+    throwIfAborted(signal);
+    for (const addr of addrs) failures.set(addr, error);
+    return { removals, failures };
+  }
+  try {
+    for (const addr of addrs) {
+      throwIfAborted(signal);
+      const parsed = parseAddr(addr);
+      if (parsed?.scheme !== 'mod') continue;
+      try {
+        const hashes: Record<ModLayer, string | null> = { idb: null, local: null };
+        let protectedMod = false;
+        for (const layer of MOD_LAYERS) {
+          throwIfAborted(signal);
+          const value = await reader.read(layer, parsed.name);
+          if (value === null) continue;
+          if (keepSelf) {
+            const meta = await readBootMeta(value);
+            if (!meta?.name || modMatches(SELF_NAME, meta)) {
+              protectedMod = true;
+              break;
+            }
+          }
+          hashes[layer] = await fingerprint(value);
+        }
+        if (!protectedMod && (hashes.idb !== null || hashes.local !== null)) {
+          removals.set(addr, Object.freeze({ addr, target: reader.target, hashes: Object.freeze(hashes) }));
+        }
+      } catch (error) {
+        throwIfAborted(signal);
+        failures.set(addr, error);
+      }
     }
-    return await deleteModValue(stored);
+    throwIfAborted(signal);
+  } finally {
+    reader.close();
+  }
+  return { removals, failures };
+}
+
+/** 只卸载确认时存在且内容未变化的层；任何失读或身份变化都会保留未动的副本。 */
+export async function uninstallMod(removal: FrozenModRemoval, signal?: AbortSignal): Promise<DeleteResult> {
+  const parsed = parseAddr(removal.addr);
+  if (parsed?.scheme !== 'mod') return { status: 'failed', error: messageError('addrInvalid', removal.addr) };
+  const { name } = parsed;
+  try {
+    throwIfAborted(signal);
+    const reader = await removalReader();
+    try {
+      if (reader.target !== removal.target) throw messageError('deleteFailed');
+      const idb = await reader.read('idb', name);
+      const local = reader.readLocal(name);
+      if (idb === null && local === null) return { status: 'absent' };
+      for (const [layer, value] of [['idb', idb], ['local', local]] as const) {
+        if ((value === null ? null : await fingerprint(value)) !== removal.hashes[layer]) {
+          throw messageError('deleteFailed');
+        }
+      }
+      throwIfAborted(signal);
+      if (reader.readLocal(name) !== local) throw messageError('deleteFailed');
+      if (idb !== null) {
+        await reader.remove('idb', name);
+        if (await reader.read('idb', name) !== null) throw messageError('deleteFailed');
+      }
+      if (local !== null) {
+        // IDB 卸载等待期间，本地层可能被替换，不可按同名删掉新值。
+        if (reader.readLocal(name) !== local) throw messageError('deleteFailed');
+        // M4 只在候选之间停止；已开始的候选仍按实际结果结算。
+        await reader.remove('local', name);
+        if (reader.readLocal(name) !== null) throw messageError('deleteFailed');
+      }
+      return { status: 'deleted' };
+    } finally {
+      reader.close();
+    }
   } catch (error) {
     return { status: 'failed', error };
   }

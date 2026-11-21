@@ -1,7 +1,8 @@
 /** zip 容器写入：本地头 + 中央目录 + EOCD，无数据描述符（大小已知）；读端在 `core/zipread.ts` */
 
+import { messageError } from '../core/error';
 import type { ByteSink } from '../core/sink';
-import type { ZipMethod } from '../core/zipread';
+import type { ZipDirectoryLimits, ZipMethod } from '../core/zipread';
 import { dosTime, localHeader, centralHeader, eocdRecord, type ZipEntryHeader } from '../core/zipwrite';
 import { CENTRAL_SIZE, EOCD_SIZE, LOCAL_SIZE, MAX_ENTRIES, MAX_UINT32 } from '../core/zipstruct';
 // CRC 放在 core：读端也要用它校验解出来的字节，而 core 不能引用 pack
@@ -88,15 +89,24 @@ export interface ZipPlanEntry {
   comp: number;
 }
 
-export function zipPlanSize(entries: readonly ZipPlanEntry[]): number {
+export function zipPlanSize(entries: readonly ZipPlanEntry[], limits?: ZipDirectoryLimits): number {
+  if (limits && entries.length > limits.centralEntries) {
+    throw messageError('bundleOpenBudget', 'ZIP', 'centralEntries', limits.centralEntries);
+  }
   assertCapacity('条目数', entries.length, MAX_ENTRIES);
   let total = EOCD_SIZE;
+  let central = 0;
+  const encoder = new TextEncoder();
   for (const entry of entries) {
     assertCapacity(`条目 ${entry.name} 的长度`, entry.comp, MAX_UINT32);
-    const nameLength = new TextEncoder().encode(entry.name).length;
+    const nameLength = encoder.encode(entry.name).length;
     total += LOCAL_SIZE + nameLength + entry.comp;
-    total += CENTRAL_SIZE + nameLength;
+    central += CENTRAL_SIZE + nameLength;
   }
+  if (limits && central > limits.centralBytes) {
+    throw messageError('bundleOpenBudget', 'ZIP', 'centralBytes', limits.centralBytes);
+  }
+  total += central;
   // 套 ModPack 容器时先用这个数值写容器头：超出上限必须在这里抛错，不能等到安装失败
   assertCapacity('包的大小', total, MAX_UINT32);
   return total;

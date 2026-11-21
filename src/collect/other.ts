@@ -1,12 +1,11 @@
 import { idbAddr, nameOfAddr, schemeOf } from '../core/address';
-import { modMatches, readBootMeta } from '../core/bootmeta';
 import { groupOfKnown } from '../core/group';
-import { selfEntry } from '../core/mapping';
 import { kindOfAddr, type Item, type ItemFlags } from '../core/item';
 import { listAddrs, type AddrInfo } from '../store/address';
 import { COARSE_MEASURE_BUDGET, measureDatabase } from '../store/idb/dump';
 import { openModReader } from '../store/mods';
 import { measuredDbItem } from './dbitem';
+import { inspectModLayers } from './mods';
 import type { CollectContext, Collector, CollectResult } from './index';
 
 /** 镜像会删除同名的两层副本；用各层的当前值判断身份，不看存储名。 */
@@ -19,32 +18,18 @@ async function fallbackModFlags(ctx: CollectContext, infos: readonly AddrInfo[])
     const names = await ctx.modNames();
     const idb = new Set(names.idb);
     const local = new Set(names.local);
-    const self = selfEntry()?.mod;
     const reader = await openModReader({ idb: names.idb.length > 0 });
     try {
       for (const addr of mods) {
         const name = nameOfAddr(addr);
         if (name === null) continue;
-        let found = false;
-        let unknown = false;
-        let own = false;
-        for (const [layer, inLayer] of [['idb', idb], ['local', local]] as const) {
-          if (!inLayer.has(name)) continue;
-          found = true;
-          try {
-            const value = await reader.readLayer(layer, name);
-            const meta = value === undefined ? null : await readBootMeta(value);
-            if (self && modMatches(self, meta)) {
-              own = true;
-              break;
-            }
-            if (!meta?.name) unknown = true;
-          } catch {
-            unknown = true;
-          }
-        }
-        if (own) out.set(addr, { self: true });
-        else if (found && !unknown) out.delete(addr);
+        const identity = await inspectModLayers(reader, name, { idb: idb.has(name), local: local.has(name) });
+        if (identity.self || identity.unknown) {
+          out.set(addr, {
+            ...(identity.self ? { self: true } : {}),
+            ...(identity.unknown ? { modIdentityUnknown: true } : {}),
+          });
+        } else out.delete(addr);
       }
     } finally {
       reader.close();

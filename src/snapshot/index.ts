@@ -9,11 +9,11 @@ import { packBlob } from '../pack';
 import {
   clearSnapshots,
   deleteSnapshot,
-  getPayload,
-  getSnapshotMeta,
   listSnapshots,
   putSnapshot,
-  updateSnapshotMeta,
+  readStoredSnapshot,
+  renameStoredSnapshot,
+  repairSnapshotMeta,
   type SnapshotMeta,
 } from '../store/snapshots';
 import { openBundle } from '../restore/bundle';
@@ -67,14 +67,19 @@ export function metaOf(manifest: Manifest, bytes: number, draft: SnapshotDraft):
   };
 }
 
+function sameFacts(left: SnapshotMeta, right: SnapshotMeta): boolean {
+  return left.bytes === right.bytes
+    && left.entries === right.entries
+    && left.gameVersion === right.gameVersion
+    && left.modVersion === right.modVersion
+    && left.format === right.format
+    && left.scope.length === right.scope.length
+    && left.scope.every((scope, i) => scope === right.scope[i]);
+}
+
 /** meta 只是缓存：与包内 manifest 对不上（例如手工换过 blob）就要按 manifest 重写 */
 export function drifted(meta: SnapshotMeta, manifest: Manifest, bytes: number): boolean {
-  return meta.bytes !== bytes
-    || meta.entries !== entriesOf(manifest)
-    || meta.gameVersion !== manifest.game
-    || meta.modVersion !== manifest.mod
-    || meta.format !== manifest.format
-    || meta.scope.join('|') !== scopeOf(manifest).join('|');
+  return !sameFacts(meta, metaOf(manifest, bytes, meta));
 }
 
 export interface CreateSnapshotInput {
@@ -85,7 +90,7 @@ export interface CreateSnapshotInput {
   mod: string;
   /** 0..1 覆盖「打包 + 写库」；扫描由调用方计时，接在自己的区间前面 */
   onProgress?: (progress: Progress) => void;
-  /** 取消只在阶段边界生效：写库是一整个事务，半路停下会留下半个快照 */
+  /** 取消只在开始写事务前生效；已开始的事务按实际结果结算。 */
   signal?: AbortSignal;
   /** 无法无损编码时：缺省中止；`skip` 由用户在确认后选择，跳过条目并记进清单 */
   onUnsupported?: 'abort' | 'skip';
@@ -108,18 +113,6 @@ async function ensureRoom(bytes: number): Promise<void> {
     Math.ceil(bytes / 1048576),
     Math.max(0, Math.floor(free / 1048576)),
   );
-}
-
-/** 部分实现不接受 Blob 值，退回二进制再写一次；事务失败时什么都不会落库 */
-async function putPayload(meta: SnapshotMeta, blob: Blob): Promise<number> {
-  try {
-    return await putSnapshot(meta, blob);
-  } catch (error) {
-    // 只有「这个实现不收 Blob」才值得重试；配额不足时整包读进内存只会更糟
-    const name = error instanceof DOMException ? error.name : '';
-    if (name !== 'DataCloneError' && !(error instanceof TypeError)) throw error;
-    return await putSnapshot(meta, new Uint8Array(await blob.arrayBuffer()));
-  }
 }
 
 /** 打包占到的份额：写库是一次性提交，没有中间进度可报 */
@@ -170,7 +163,8 @@ export async function createSnapshot(input: CreateSnapshotInput): Promise<Snapsh
     createdAt: new Date().toISOString(),
   });
   input.onProgress?.({ phase: 'write', ratio: PACK_END });
-  const id = await putPayload(meta, result.blob);
+  throwIfAborted(input.signal);
+  const id = await putSnapshot(meta, result.blob, input.signal);
   input.onProgress?.({ phase: 'write', ratio: 1 });
   return { ...meta, id };
 }
@@ -193,32 +187,31 @@ export async function bytesOfPayload(payload: Uint8Array | Blob): Promise<Uint8A
   return payload instanceof Uint8Array ? payload : new Uint8Array(await payload.arrayBuffer());
 }
 
-/** 读快照并把 meta 与包内 manifest 对齐；对不上就重写索引并标 repaired */
+/** 读快照；只有原 payload 仍在时才把包内 manifest 写回最新元数据。 */
 export async function loadSnapshot(id: number): Promise<LoadedSnapshot | null> {
-  const payload = await getPayload(id);
-  if (!payload) return null;
+  const stored = await readStoredSnapshot(id);
+  if (!stored) return null;
+  const { meta, payload, generation } = stored;
   const size = byteLengthOf(payload);
-  const bundle = await openBundle(payload);
-  const stored = await getSnapshotMeta(id);
-  if (!stored) {
-    return { payload, size, meta: { ...metaOf(bundle.manifest, size, { kind: 'manual', label: '', createdAt: new Date().toISOString() }), id } };
+  const { manifest } = await openBundle(payload);
+  if (!meta) {
+    return { payload, size, meta: { ...metaOf(manifest, size, { kind: 'manual', label: '', createdAt: new Date().toISOString() }), id } };
   }
-  if (!drifted(stored, bundle.manifest, size)) return { payload, size, meta: stored };
+  const expected = metaOf(manifest, size, meta);
+  if (!generation || sameFacts(meta, expected)) return { payload, size, meta };
 
-  const fixed: SnapshotMeta = {
-    ...metaOf(bundle.manifest, size, { kind: stored.kind, label: stored.label, createdAt: stored.createdAt }),
-    id,
-    repaired: true,
-  };
-  await updateSnapshotMeta(fixed);
-  return { payload, size, meta: fixed };
+  const current = await repairSnapshotMeta(id, generation, latest => {
+    // 缓存已变则放弃写回；仅改名则可以合并，因为写回只改 manifest 派生字段。
+    if (!sameFacts(latest, meta) || latest.repaired !== meta.repaired) return latest;
+    return { ...latest, ...metaOf(manifest, size, latest), repaired: true };
+  });
+  if (!current) return null;
+  // 并发写过缓存时仍给本次调用正确的包信息，但不改变已提交的索引。
+  return { payload, size, meta: sameFacts(current, expected) ? current : { ...current, ...metaOf(manifest, size, current) } };
 }
 
-export async function renameSnapshot(id: number, label: string): Promise<boolean> {
-  const meta = await getSnapshotMeta(id);
-  if (!meta) return false;
-  await updateSnapshotMeta({ ...meta, label });
-  return true;
+export function renameSnapshot(id: number, label: string): Promise<boolean> {
+  return renameStoredSnapshot(id, label);
 }
 
 export async function deleteSnapshotById(id: number): Promise<void> {

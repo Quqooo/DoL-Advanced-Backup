@@ -371,7 +371,7 @@ export function createExportPane(deps: ExportPaneDeps): ExportPane {
     })
       .then(
         outcome => {
-          toast(t().exported(outcome.name, formatBytes(outcome.bytes), outcome.selfRestore));
+          toast(t().exported(outcome.name, formatBytes(outcome.bytes), outcome.selfRestore, outcome.method === 'download'));
         },
         error => {
           notices.fail(error);

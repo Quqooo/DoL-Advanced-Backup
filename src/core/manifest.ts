@@ -174,8 +174,12 @@ function isCrc32(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{8}$/.test(value);
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
 function isCount(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  return isFiniteNumber(value) && value >= 0;
 }
 
 /** 槽号是 IDB 主键，必须是非负整数。`isCount` 允许 1.5，会在建树时导致分组失败 */
@@ -194,8 +198,9 @@ function parseIndex(raw: unknown): ManifestIndex | null {
   for (const save of saves) {
     if (!isRecord(save) || !isSlot(save.slot) || !isCount(save.b)) return null;
     if (save.title !== undefined && typeof save.title !== 'string') return null;
-    if (save.date !== undefined && !isCount(save.date)) return null;
-    if (save.id !== undefined && !isCount(save.id)) return null;
+    // 时间戳（Unix 纪元前）和宿主存档 ID 都可能合法为负，不是大小或计数。
+    if (save.date !== undefined && !isFiniteNumber(save.date)) return null;
+    if (save.id !== undefined && !isFiniteNumber(save.id)) return null;
     if (save.name !== undefined && typeof save.name !== 'string') return null;
     if (save.delta !== undefined && typeof save.delta !== 'boolean') return null;
   }

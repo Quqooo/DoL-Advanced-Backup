@@ -1,6 +1,5 @@
 import {
   DETAIL_STORE,
-  GAME_DB,
   LEGACY_DETAILS_KEY,
   LEGACY_SAVES_KEY,
   SAVE_STORE,
@@ -8,7 +7,10 @@ import {
 import { messageError } from '../core/error';
 import { dateOf } from '../core/savemeta';
 import { abortQuietly, close, ensureDb, getAll, openDb, request } from './idb';
+import { confirmedGameDb, gameDbName } from './db-identity';
 import { readKey } from './local';
+
+export { gameDbName, useGameDb } from './db-identity';
 
 export interface SaveRecord {
   slot: number;
@@ -20,18 +22,10 @@ export interface DetailRecord {
   data: Record<string, unknown>;
 }
 
-/**
- * 游戏 IDB 的库名。`idb.init(name)` 允许传别的名字，`GAME_DB` 只是常见情况；
- * 由 app 层在扫描前从宿主取一次，store 不因此引用 host。
- */
-let gameDb = GAME_DB;
-
-export function useGameDb(name: string | null | undefined): void {
-  gameDb = name || GAME_DB;
-}
-
-export function gameDbName(): string {
-  return gameDb;
+function writeTarget(): string {
+  const name = confirmedGameDb();
+  if (name === null) throw messageError('dbNameUnknown');
+  return name;
 }
 
 function normalize(records: unknown[]): SaveRecord[] {
@@ -44,7 +38,7 @@ function normalize(records: unknown[]): SaveRecord[] {
 }
 
 async function readStore(store: string): Promise<SaveRecord[]> {
-  const db = await openDb(gameDb);
+  const db = await openDb(gameDbName());
   if (!db) return [];
   try {
     return normalize(await getAll(db, store));
@@ -63,7 +57,7 @@ export function readDetails(): Promise<DetailRecord[]> {
 
 /** 兜底只需要槽号；即使存档值读取失败，也可尝试列出主键。 */
 export async function listSaveSlots(): Promise<number[]> {
-  const db = await openDb(gameDb);
+  const db = await openDb(gameDbName());
   if (!db) return [];
   try {
     const keys = await request(db.transaction(SAVE_STORE, 'readonly').objectStore(SAVE_STORE).getAllKeys());
@@ -76,7 +70,7 @@ export async function listSaveSlots(): Promise<number[]> {
 /** 导出只搬运勾选的槽；两仓的请求在同一只读事务里排入。 */
 export async function readSaveSlots(slots: ReadonlySet<number>): Promise<{ saves: SaveRecord[]; details: DetailRecord[] }> {
   if (slots.size === 0) return { saves: [], details: [] };
-  const db = await openDb(gameDb);
+  const db = await openDb(gameDbName());
   if (!db) return { saves: [], details: [] };
   try {
     const tx = db.transaction([SAVE_STORE, DETAIL_STORE], 'readonly');
@@ -116,7 +110,7 @@ export async function writeSaves(
   missing = false,
   options: { removeMissingDetails?: boolean } = {},
 ): Promise<Set<number>> {
-  const db = await ensureDb(gameDb, 1, [
+  const db = await ensureDb(writeTarget(), 1, [
     { name: SAVE_STORE, keyPath: 'slot' },
     { name: DETAIL_STORE, keyPath: 'slot' },
   ]);
@@ -199,7 +193,7 @@ export function writeLegacy(
 /** 两仓按槽位成对删除：只剩一边会让存档列表多出一个打不开的槽 */
 export async function deleteSaves(slots: readonly number[]): Promise<void> {
   if (slots.length === 0) return;
-  const db = await openDb(gameDb);
+  const db = await openDb(writeTarget());
   if (!db) return;
   try {
     await saveTransaction(db, (saves, details) => {
@@ -220,7 +214,7 @@ export async function deleteSaves(slots: readonly number[]): Promise<void> {
  * 存档被当成「本来就有」或「本来就没有」。调用方按返回值报告删除数。
  */
 export async function deleteSaveSlot(slot: number): Promise<boolean> {
-  const db = await openDb(gameDb);
+  const db = await openDb(writeTarget());
   if (!db) return false;
   try {
     let existed = false;

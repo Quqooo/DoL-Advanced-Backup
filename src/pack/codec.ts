@@ -50,6 +50,16 @@ export function looksCompressed(bytes: Uint8Array): boolean {
 /** 送入压缩流的分块：足够大以减少调用开销，足够小以让进度每几 MB 更新一次 */
 const FEED_CHUNK = 4 * 1024 * 1024;
 
+function makeRawDeflater(): ReadableWritablePair<Uint8Array, Uint8Array> | undefined {
+  if (typeof CompressionStream !== 'function') return undefined;
+  try {
+    // 部分旧 WebView 有 CompressionStream，但构造器不支持 deflate-raw。
+    return new CompressionStream('deflate-raw') as unknown as ReadableWritablePair<Uint8Array, Uint8Array>;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * 压缩一整个条目。`onProgress` 收到已送入压缩流的字节数：`CompressionStream` 按消费者
  * 的节奏拉数据，所以这个数字是真实的处理进度，不是估算。
@@ -58,7 +68,8 @@ export async function deflateRaw(
   bytes: Uint8Array,
   onProgress?: (fed: number) => void,
 ): Promise<Uint8Array> {
-  if (typeof CompressionStream === 'function') {
+  const compressor = makeRawDeflater();
+  if (compressor) {
     let at = 0;
     const source = new ReadableStream<Uint8Array>({
       pull(controller) {
@@ -72,10 +83,7 @@ export async function deflateRaw(
         onProgress?.(at);
       },
     });
-    const stream = source.pipeThrough(
-      // CompressionStream 的 writable 声明为 BufferSource，与流的 Uint8Array 分块是同一件事
-      new CompressionStream('deflate-raw') as unknown as ReadableWritablePair<Uint8Array, Uint8Array>,
-    );
+    const stream = source.pipeThrough(compressor);
     return new Uint8Array(await new Response(stream).arrayBuffer());
   }
   const packed = deflateSync(bytes, { level: 6 });
@@ -201,8 +209,8 @@ export async function encodeStream(
     return encoded([data], 93);
   }
 
-  if (typeof CompressionStream === 'function') {
-    const stream = new CompressionStream('deflate-raw') as unknown as ReadableWritablePair<Uint8Array, Uint8Array>;
+  const stream = makeRawDeflater();
+  if (stream) {
     const writer = stream.writable.getWriter();
     const reader = stream.readable.getReader();
     const drained = (async () => {
@@ -230,7 +238,7 @@ export async function encodeStream(
     return encoded(chunks, 8);
   }
 
-  // 没有 CompressionStream 的旧 WebView：只能先累积整段再压
+  // 没有 raw CompressionStream 的旧 WebView：只能先累积整段再压
   await produce({ write(chunk) { count(chunk); collect(chunk); } });
   return encoded([deflateSync(concatChunks(chunks, total), { level: 6 })], 8);
 }

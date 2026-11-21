@@ -1,112 +1,161 @@
 import { SELF_PACK_INNER } from '../core/constants';
 import { crc32 } from '../core/crc32';
-import { parseJson } from '../core/json';
-import { parseManifest } from '../core/manifest';
+import { DecodeOutputLimit } from '../core/deflate';
+import { hasOwn } from '../core/guards';
+import { CENTRAL_SIZE } from '../core/zipstruct';
+import type { ZipMethod } from '../core/zipread';
 import type { ZipEntryLike, ZipLike } from '../host/self';
 import {
+  BundleBudgetExceeded,
   BundleError,
-  MANIFEST_IDS,
   bundleOf,
+  decodeOpeningEntry,
   openBundle,
+  openLimits,
+  openingEntryLimits,
+  parseBundleManifest,
+  preloadMapping,
   verifyEntries,
-  verifyIndex,
   type Bundle,
+  type OpenBundleLimits,
   type ZipEntryMeta,
 } from './bundle';
 
-/** 清单是包内唯一直接解 JSON 的条目，其余走 `Bundle.readJson` */
-const decoder = new TextDecoder();
-
-/**
- * 句柄里的条目读不出来，或拿不到中央目录的大小与 CRC。
- *
- * 前者多半是 ZSTD（JSZip 只认 STORE / DEFLATE），后者是别的 ZIP 实现没有
- * JSZip 的 `_data`。两种情况都只能退回存储层的字节路径，不能当成包坏了。
- */
+/** 句柄不能安全/完整读取时，请调用方使用经过同源检查的字节路径。 */
 export class ZipBundleUnreadable extends Error {}
 
 export function isZipBundleUnreadable(error: unknown): boolean {
   return error instanceof ZipBundleUnreadable;
 }
 
-/** JSZip 的 ZipObject 把中央目录的元数据放在 `_data`；字段不齐时按「拿不到」处理 */
+/** JSZip 的 ZipObject 把中央目录元数据放在 _data；CRC 在 JSZip 中可能是有符号整数。 */
 function metaOf(file: ZipEntryLike): ZipEntryMeta | null {
-  const data = file._data;
-  if (!data) return null;
-  if (typeof data.uncompressedSize !== 'number' || typeof data.crc32 !== 'number') return null;
-  return { size: data.uncompressedSize, crc: data.crc32 };
+  const size = file._data?.uncompressedSize;
+  const crc = file._data?.crc32;
+  if (typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0
+    || typeof crc !== 'number' || !Number.isInteger(crc) || crc < -0x80000000 || crc > 0xffffffff) return null;
+  return { size, crc };
+}
+
+type HandleData = { compressedContent?: unknown; compression?: { magic?: unknown } };
+
+/** JSZip 3 的 CompressedObject 保留压缩字节。旧/不同实现不一定提供。 */
+function compressedOf(file: ZipEntryLike): { bytes: Uint8Array; method: ZipMethod } | null {
+  const data = file._data as HandleData | undefined;
+  if (!(data?.compressedContent instanceof Uint8Array)) return null;
+  const magic = data.compression?.magic;
+  const method = magic === '\x00\x00' ? 0 : magic === '\x08\x00' ? 8 : magic === '\x5d\x00' ? 93 : null;
+  return method === null ? null : { bytes: data.compressedContent, method };
 }
 
 /**
- * 把「自己那个 zip」包成 Bundle，供恢复流程使用。
- *
- * 不走 `openBundle(bytes)`：那要先调用 `generateAsync` 重新序列化整个包，
- * 几 MB 的包会多等一两秒，并额外占用一份内存。zip 句柄可以直接按名字取条目。
- *
- * 容器形态（ModLoader 适配器句柄）没有 manifest.json 条目：取出内层 zip 字节，
- * 交给 `openBundle`——剥壳逻辑只在它一处。
+ * 句柄的中央目录已经由宿主加载；这里限制建表的条数及记录头 + 名字的字节数。
+ * 预读小条目尽量走压缩字节；不透明且元数据齐备的旧句柄只做声明前置及返回后检查。
+ * 这种兼容路径不能约束宿主在 async() 内部分配的中间内存。
  */
-export async function bundleOfZip(zip: ZipLike): Promise<Bundle> {
-  const names = new Set(Object.keys(zip.files).filter(name => !zip.files[name].dir));
-  if (!names.has('manifest.json')) {
-    if (names.has(SELF_PACK_INNER)) {
-      const inner = await zip.files[SELF_PACK_INNER].async('uint8array');
-      return openBundle(inner);
+export function boundedHandleNames(zip: ZipLike, limits: OpenBundleLimits): Set<string> {
+  const names = new Set<string>();
+  const encoder = new TextEncoder();
+  let count = 0;
+  let directoryBytes = 0;
+  for (const name in zip.files) {
+    if (!hasOwn(zip.files, name)) continue;
+    const file = zip.files[name];
+    if (++count > limits.centralEntries) throw new BundleBudgetExceeded('ZIP handle', 'centralEntries', limits.centralEntries);
+    if (name.length + CENTRAL_SIZE > limits.centralBytes - directoryBytes) {
+      throw new BundleBudgetExceeded('ZIP handle', 'centralBytes', limits.centralBytes);
     }
-    throw new BundleError('manifest', 'bundleNoManifest');
+    directoryBytes += CENTRAL_SIZE + encoder.encode(name).length;
+    if (directoryBytes > limits.centralBytes) throw new BundleBudgetExceeded('ZIP handle', 'centralBytes', limits.centralBytes);
+    if (!file.dir) names.add(name);
   }
 
-  /** 已经验过的条目：同一个包在一轮恢复里会被读两遍（骨架 + 写入） */
-  const verified = new Set<string>();
+  return names;
+}
 
-  /** 与 `openBundle` 一样：`idb.json` 只解一次，三处读取共用同一份 */
-  const cached = new Map<string, Uint8Array>();
+const extractOpaque = async (file: ZipEntryLike, path: string): Promise<Uint8Array> => {
+  try {
+    return await file.async('uint8array');
+  } catch {
+    throw new ZipBundleUnreadable(path);
+  }
+};
 
-  const read = async (path: string): Promise<Uint8Array> => {
-    const hit = cached.get(path);
-    if (hit) return hit;
-    const file = zip.files[path];
-    if (!file) throw new BundleError('entry', 'bundleMissingEntry', path);
-    let bytes: Uint8Array;
-    try {
-      bytes = await file.async('uint8array');
-    } catch {
-      // JSZip 解不了这种压缩方法：让调用方改用存储里的原始字节
-      throw new ZipBundleUnreadable(path);
-    }
-    // 清单与中央目录的对照只能证明元数据没被改过；内容本身要解出来重算一次。
-    // 与字节路径同一个判据，否则同一个坏包在两条路径上会得到不同结论。
-    // `_data.crc32` 是 JSZip 按有符号 32 位读出来的，比较前要归一到无符号。
-    if (!verified.has(path)) {
-      const meta = metaOf(file);
-      if (meta && (bytes.byteLength !== meta.size || crc32(bytes) !== (meta.crc >>> 0))) {
-        throw new BundleError('verify', 'bundleCrcMismatch', path);
+
+/** 也供自恢复同源验证使用；不能为哈希而绕开必读条目的预算。 */
+export async function readHandleEntry(
+  file: ZipEntryLike, path: string, limits: OpenBundleLimits,
+  { verified = false, allowOpaqueFallback = false } = {},
+): Promise<Uint8Array> {
+  const meta = metaOf(file);
+  const cap = openingEntryLimits(path, limits);
+  let bytes: Uint8Array;
+  if (cap) {
+    const raw = compressedOf(file);
+    if (!meta && !allowOpaqueFallback) throw new ZipBundleUnreadable(path);
+    const size = meta?.size ?? cap.output;
+    if (size > cap.output) throw new BundleBudgetExceeded(path, 'declared', cap.output);
+    if (raw) {
+      if (raw.bytes.byteLength > cap.input) throw new BundleBudgetExceeded(path, 'compressed', cap.input);
+      try {
+        const decoded = await decodeOpeningEntry(raw.bytes, raw.method, size);
+        if (!decoded) throw new ZipBundleUnreadable(path);
+        bytes = decoded;
+      } catch (error) {
+        if (error instanceof DecodeOutputLimit) throw new BundleBudgetExceeded(path, 'actual', error.limit);
+        throw new ZipBundleUnreadable(path);
       }
-      verified.add(path);
+    } else {
+      bytes = await extractOpaque(file, path);
     }
-    if (path === 'idb.json') cached.set(path, bytes);
+    if (bytes.byteLength > size) throw new BundleBudgetExceeded(path, 'actual', size);
+    if (raw?.method === 0) bytes = bytes.slice(); // 不把 JSZip 整包的缓冲交出去
+  } else {
+    bytes = await extractOpaque(file, path);
+  }
+  if (meta && (bytes.byteLength !== meta.size || ((cap || !verified) && crc32(bytes) !== (meta.crc >>> 0)))) {
+    throw new BundleError('verify', 'bundleCrcMismatch', path);
+  }
+  return bytes;
+}
+
+export async function bundleOfZip(zip: ZipLike, overrides?: Partial<OpenBundleLimits>): Promise<Bundle> {
+  const limits = openLimits(overrides);
+  const names = boundedHandleNames(zip, limits);
+  const fileOf = (name: string): ZipEntryLike | undefined => hasOwn(zip.files, name) ? zip.files[name] : undefined;
+
+  if (!names.has('manifest.json')) {
+    const file = fileOf(SELF_PACK_INNER);
+    if (!file || file.dir) throw new BundleError('manifest', 'bundleNoManifest');
+    // 容器适配器整段交付内层 zip；没有随机读 API。STORE 句柄可直接借用其现有字节，
+    // 其余保持旧路径兼容；拿到内层后正常应用开包预算，不能把这里当作整条容器硬上限。
+    const raw = compressedOf(file);
+    const inner = raw?.method === 0 ? raw.bytes : await extractOpaque(file, SELF_PACK_INNER);
+    const meta = metaOf(file);
+    if (meta && (inner.byteLength !== meta.size || crc32(inner) !== (meta.crc >>> 0))) {
+      throw new BundleError('verify', 'bundleCrcMismatch', SELF_PACK_INNER);
+    }
+    return openBundle(inner, limits);
+  }
+
+  const verified = new Set<string>();
+  let idbBytes: Uint8Array | null = null;
+  const read = async (path: string): Promise<Uint8Array> => {
+    if (path === 'idb.json' && idbBytes) return idbBytes;
+    const file = fileOf(path);
+    if (!file || file.dir) throw new BundleError('entry', 'bundleMissingEntry', path);
+    const bytes = await readHandleEntry(file, path, limits, { verified: verified.has(path) });
+    verified.add(path);
+    if (path === 'idb.json') idbBytes = bytes;
     return bytes;
   };
 
-  const raw = await read('manifest.json');
-
-  let parsedRaw: unknown;
-  try {
-    parsedRaw = parseJson(decoder.decode(raw));
-  } catch {
-    throw new BundleError('json', 'bundleManifestJson');
-  }
-  // 错误码按 `parseManifest` 的结论分开报，不再一律折成「不是本模组生成的包」
-  const parsed = parseManifest(parsedRaw);
-  if (!parsed.ok) throw new BundleError('manifest', MANIFEST_IDS[parsed.error] ?? parsed.error);
-
-  verifyIndex(parsed.manifest);
-  // 中央目录的元数据不全时不算失败：交给 loadRestorePack 退回字节路径再验一次
-  const complete = verifyEntries(parsed.manifest, file => {
-    const entry = zip.files[file];
-    return entry ? metaOf(entry) : undefined;
+  const manifest = parseBundleManifest(await read('manifest.json'), limits);
+  const complete = verifyEntries(manifest, path => {
+    const file = fileOf(path);
+    return file && !file.dir ? metaOf(file) : undefined;
   });
   if (!complete) throw new ZipBundleUnreadable('entry metadata');
-
-  return bundleOf(parsed.manifest, names, read);
+  // mapping.json 元数据不足不应触发无界 async()；让它像损坏的可选映射一样不参与分组。
+  return { ...bundleOf(manifest, names, await preloadMapping(names, read)), releaseLegacyIdb: () => { idbBytes = null; } };
 }

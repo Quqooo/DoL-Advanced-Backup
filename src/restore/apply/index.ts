@@ -1,7 +1,7 @@
-import { nameOfAddr, slotOfAddr } from '../../core/address';
-import { messageError, throwIfAborted } from '../../core/error';
+import { MOD_ORDER_ADDR, nameOfAddr, slotOfAddr } from '../../core/address';
+import { isAbort, messageError, throwIfAborted } from '../../core/error';
 import { verifySectionIndex } from '../plan/sections';
-import type { Item } from '../../core/item';
+import { categoryOfGroup, type Item } from '../../core/item';
 import type { Category } from '../../core/types';
 import { collectBlobRefs } from '../../pack/encode';
 import { createDecoder } from '../../pack/decode';
@@ -10,8 +10,9 @@ import { databases } from '../../store/idb';
 import { removePendingDrop } from '../../store/pending-drop';
 import { loadBlobs } from '../bundle';
 import { mirrorPlan } from '../clean';
-import { prepareMirror } from '../plan/mirror';
+import { freezeMirror, prepareMirror } from '../plan/mirror';
 import type { RestorePlan, RestoreReport } from '../types';
+import { assertSelectedDbTargets } from '../db-targets';
 import { applyDbs, openDbSections } from './dbs';
 import { applyKeys } from './keys';
 import { applyMods, reconcileModOrder } from './mods';
@@ -127,6 +128,7 @@ function stepWeight(
 
 export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
   throwIfAborted(input.signal);
+  assertSelectedDbTargets(input.plan.items, input.selected);
   // 计划阶段只建树，分区是写入前才读的；直接调这里的路径（不经 restorePackage）也要补齐
   if (Object.keys(input.plan.sections).length === 0) {
     input.plan.sections = await input.plan.loadSections();
@@ -152,23 +154,35 @@ export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
   emit(LOAD_END);
   throwIfAborted(input.signal);
 
-  const { scope, candidates } = input.mirror ?? prepareMirror(input.plan, input.selected, input.keepSelf !== false);
-  // 写模组列表时排除稍后会被卸载的包，以避免留下无效条目。
+  const keepSelf = input.keepSelf !== false;
+  const frozen = input.mirror ?? await freezeMirror(prepareMirror(input.plan, input.selected, keepSelf), keepSelf, input.signal);
+  const { scope, candidates, modRemovals } = frozen;
+  // 冻结失败的模组也要保留原启用/禁用意图。
   const droppedMods = new Set(
-    candidates
-      .filter(item => item.kind === 'mod')
-      .map(item => nameOfAddr(item.addr))
+    [...candidates.filter(item => item.kind === 'mod').map(item => item.addr),
+      ...frozen.failures.flatMap(item => typeof item.item === 'string' && item.item.startsWith('mod:') ? [item.item] : [])]
+      .map(addr => nameOfAddr(addr))
       .filter((name): name is string => name !== null),
   );
 
 
+  // Failure categories must agree with the local mirror candidates, regardless of package display grouping.
+  const groups = input.plan.localGroups;
+  const executionPlan = groups ? {
+    ...input.plan,
+    items: input.plan.items.map(item => {
+      const group = groups.get(item.addr);
+      return group && group !== item.group ? { ...item, group } : item;
+    }),
+  } : input.plan;
   const state: ApplyState = {
-    plan: input.plan,
+    plan: executionPlan,
     selected: input.selected,
     selfPack: input.selfPack === true,
     format: input.plan.bundle.manifest.format === 1 ? 1 : 2,
     resolve: file => blobs.get(file) ?? null,
     report,
+    ...(input.signal ? { signal: input.signal } : {}),
     dbNames: new Set((await databases()).map(item => item.name)),
     droppedMods,
     writtenDbs: new Set(),
@@ -192,55 +206,74 @@ export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
   const spanOf = (weight: number): number => (1 - LOAD_END) * (weight / totalWeight);
   let base = LOAD_END;
 
+  let started = false;
   try {
     for (const [index, step] of steps.entries()) {
-      throwIfAborted(input.signal);
+      if (input.signal?.aborted) break;
       const span = spanOf(weights[index]);
       state.tick = fraction => emit(base + span * Math.min(1, Math.max(0, fraction)), step.label);
       emit(base, step.label);
-      try {
-        await step.run();
-      } catch (error) {
-        fail(report, step.category, step.label, error);
-        stepFailures.push(...categoriesOf(state, step.kinds));
+      if (input.signal?.aborted) break;
+      if (categoriesOf(state, step.kinds).length > 0) {
+        started = true;
+        try {
+          await step.run();
+        } catch (error) {
+          if (!(input.signal?.aborted && isAbort(error))) {
+            fail(report, step.category, step.label, error);
+            stepFailures.push(...categoriesOf(state, step.kinds));
+          }
+        }
       }
+      if (input.signal?.aborted) break;
       base += span;
       emit(base, step.label);
     }
 
-    // 这次写回去的库要从待删标记里退掉：用户在重载前又恢复了一次，旧名字会让它下次启动被误删
-    if (state.writtenDbs.size > 0) removePendingDrop(state.writtenDbs);
-
-    if (scope !== null) {
-      throwIfAborted(input.signal);
-      const span = spanOf(mirrorWeight);
-      state.tick = fraction => emit(base + span * Math.min(1, Math.max(0, fraction)), 'mirror');
+    if (scope !== null && !input.signal?.aborted) {
       emit(base, 'mirror');
-      // 逐条失败与整步失败都要算：前者记在条目的分类上，后者由步骤自己声明
-      const failed = new Set<Category>([...report.failures.map(item => item.category), ...stepFailures]);
-      const mirror = await mirrorPlan({
-        candidates,
-        failed,
-        selfPack: state.selfPack,
-      });
-      Object.assign(report.deleted, mirror.deleted);
-      report.failures.push(...mirror.failures);
-      report.skippedMirror = mirror.skipped;
-      if (mirror.skipped.length > 0) {
-        warn(report, { code: 'mirror-skipped', detail: mirror.skipped.join(', ') });
+      if (!input.signal?.aborted) {
+        // 逐条失败与整步失败都要算：前者记在条目的分类上，后者由步骤自己声明
+        const failed = new Set<Category>([...report.failures.map(item => item.category), ...stepFailures]);
+        started ||= candidates.some(item => !failed.has(categoryOfGroup(item.group)));
+        const mirror = await mirrorPlan({
+          candidates,
+          modRemovals,
+          failed,
+          selfPack: state.selfPack,
+          ...(input.signal ? { signal: input.signal } : {}),
+        });
+        Object.assign(report.deleted, mirror.deleted);
+        report.failures.push(...mirror.failures);
+        if (mirror.cancelled) report.cancelled = true;
+        report.skippedMirror = mirror.skipped;
+        if (mirror.skipped.length > 0) {
+          warn(report, { code: 'mirror-skipped', detail: mirror.skipped.join(', ') });
+        }
+        if (Object.values(mirror.deleted).some(value => (value ?? 0) > 0)) report.needsReload = true;
       }
-      if (Object.values(mirror.deleted).some(value => (value ?? 0) > 0)) report.needsReload = true;
-      base += span;
     }
 
+    report.failures.push(...frozen.failures);
+
+    // 取消后不能开新的写事务；镜像前没有从列表中预删候选，不需要在取消时补写。
+    if (!input.signal?.aborted && (droppedMods.size > 0 || categoriesOf(state, ['mod', 'mod-list']).length > 0)) {
+      started = true;
+      const preserveMissingOrder = candidates.some(item => item.addr === MOD_ORDER_ADDR);
+      await reconcileModOrder(state, preserveMissingOrder).catch(error => {
+        if (!(input.signal?.aborted && isAbort(error))) fail(report, 'mods', 'mods', error);
+      });
+    }
   } finally {
-    /**
-     * 对账始终执行，取消也要跑：`applyLists` 已经按删除名单剪过启用列表，
-     * 而镜像可能因取消没执行——包还在，名字却没了。对账按存储里的实际内容补回来。
-     */
-    await reconcileModOrder(state).catch(error => fail(report, 'mods', 'mods', error));
+    // 即使后续取消，已经写回的库不能仍排队等重载删除。
+    if (state.writtenDbs.size > 0) removePendingDrop(state.writtenDbs);
   }
 
-  emit(1);
+  if (input.signal?.aborted) {
+    if (!started) throwIfAborted(input.signal);
+    report.cancelled = true;
+  } else {
+    emit(1);
+  }
   return report;
 }

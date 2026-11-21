@@ -15,13 +15,12 @@ const DB_NAME_GRACE_MS = 5000;
 
 /** 游戏补丁进 SugarCube 的 idb 模块；未启用时也可能存在 */
 export function idbApi(): any {
-  return (window as any).idb ?? sugar()?.idb;
+  return typeof window === 'undefined' ? undefined : (window as any).idb ?? sugar()?.idb;
 }
 
 function usableDbName(value: unknown): string | null {
   if (typeof value !== 'string') return null;
-  const name = value.trim();
-  return name === '' || name === PLACEHOLDER_DB ? null : name;
+  return value.trim() === '' || value === PLACEHOLDER_DB ? null : value;
 }
 
 export function dbName(): string {

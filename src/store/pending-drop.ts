@@ -1,8 +1,7 @@
 import { PENDING_DROP_KEY } from '../core/constants';
 import { parseJson, stringifyJson } from '../core/json';
 import { readKey, removeKeys, writeKey } from './local';
-import { modKeys } from './modkeys';
-import { gameDbName } from './saves';
+import { wholeDbGuard } from './whole-db';
 
 /**
  * 待删的空库名单：干净恢复清空过、下一次重载后才复查删除的库名。
@@ -67,5 +66,5 @@ function save(names: readonly string[]): void {
  * 只有关掉「保留本模组」的干净恢复才会把它记进标记，清理按标记放行（见 `app/cleanup.ts`）。
  */
 export function isProtectedDb(name: string): boolean {
-  return name === gameDbName() || name === modKeys().db;
+  return wholeDbGuard()(name) !== null;
 }

@@ -1,7 +1,9 @@
 import type { MessageError } from '../core/error';
 import type { Category, RestoreMode } from '../core/types';
 import type { Item } from '../core/item';
+import type { MappingTable } from '../core/mapping';
 import type { IndexSpec } from '../store/idb';
+import type { ImagePackLayout } from '../store/modkeys';
 import type { Bundle } from './bundle';
 
 /** 分区 JSON 的形状，与 pack/sections.ts 写出的结构一一对应 */
@@ -69,6 +71,8 @@ export interface RestoreWarning {
   code: RestoreWarningCode;
   /** 明细：文件名、数量这类数据原样写；成句的说明走词条 */
   detail?: string | MessageError;
+  /** 清单中的文件路径或地址，界面应以文本显示。 */
+  entries?: readonly string[];
 }
 
 export interface RestorePlan {
@@ -81,8 +85,14 @@ export interface RestorePlan {
    * 因此发生在用户按下「开始恢复」之后，不拖慢选包时的预览。
    */
   loadSections(onProgress?: (ratio: number) => void): Promise<PackageSections>;
-  /** 包内条目；分组已按 groupOf 重算 */
+  /** 包内条目；分组已按本次计划的显示映射重算 */
   items: Item[];
+  /** 本次计划的显示映射：供恢复树查分组标题与角标。 */
+  mapping: MappingTable;
+  /** 计划时捕获的目标宿主图库物理名，恢复写入沿用同一份角色。 */
+  imagePacks: ImagePackLayout;
+  /** 与显示分组不同的本机分组，用于写入结果及失败后的镜像保护。 */
+  localGroups: ReadonlyMap<string, string>;
   /** 包内可恢复的地址 */
   available: Set<string>;
   /** 本机现状（导入时现采）；镜像与删除预告都拿它和勾选集做差 */
@@ -102,6 +112,8 @@ export interface RestoreFailure {
 
 export interface RestoreReport {
   mode: RestoreMode;
+  /** 写入阶段取消；计数与失败明细仍为已结算的真实结果。 */
+  cancelled?: true;
   applied: Partial<Record<Category, number>>;
   skipped: Partial<Record<Category, number>>;
   failures: RestoreFailure[];

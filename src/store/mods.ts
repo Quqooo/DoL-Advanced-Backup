@@ -2,7 +2,7 @@ import { bytesToBase64 } from '../core/format';
 import { messageError } from '../core/error';
 import { stringifyJson } from '../core/json';
 import type { DeleteResult } from '../core/types';
-import { close, deleteByKeys, ensureDb, getAllWithKeys, openDb, putRecords, request } from './idb';
+import { abortQuietly, close, deleteByKeys, ensureDb, getAllWithKeys, openDb, putRecords, request } from './idb';
 import { listStorageKeys, readKey, removeKeys } from './local';
 import { localModKeys, modKeys, type ModKeys } from './modkeys';
 
@@ -12,15 +12,15 @@ export type { ModKeys };
 export type ModValue = string | Uint8Array;
 export type ModValueType = 'empty' | 'string' | 'uint8array' | 'mixed';
 
-export interface IdbMods {
-  enabled: string[];
-  hidden: string[];
+export interface IdbMods extends IdbModLists {
   values: Map<string, ModValue>;
   valueType: ModValueType;
 }
 
 export interface LocalMods {
   list: string[];
+  listPresent: boolean;
+  listValid: boolean;
   values: Map<string, string>;
 }
 
@@ -33,8 +33,10 @@ function parseList(raw: unknown): { values: string[]; valid: boolean } {
   try {
     // 加载器写入的列表：解析跟着宿主走，2.37 起的 revive 标记按原类型还原
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return { values: [], valid: false };
-    return { values: parsed.filter((item): item is string => typeof item === 'string'), valid: true };
+    if (!Array.isArray(parsed) || parsed.some(item => typeof item !== 'string')) {
+      return { values: [], valid: false };
+    }
+    return { values: parsed as string[], valid: true };
   } catch {
     return { values: [], valid: false };
   }
@@ -57,21 +59,26 @@ function valueTypeOf(values: Map<string, ModValue>): ModValueType {
 export async function readIdbMods(): Promise<IdbMods> {
   const keys = modKeys();
   const db = await openDb(keys.db);
-  if (!db) return { enabled: [], hidden: [], values: new Map(), valueType: 'empty' };
+  if (!db) return { ...emptyLists(), values: new Map(), valueType: 'empty' };
   try {
     const all = await getAllWithKeys<unknown>(db, keys.store);
     const map = new Map<string, ModValue>();
-    let enabled: string[] = [];
-    let hidden: string[] = [];
+    const lists = emptyLists();
     for (let index = 0; index < all.keys.length; index++) {
       const key = String(all.keys[index]);
       const value = all.values[index];
       if (key === keys.list) {
-        enabled = parseList(value).values;
+        const { values, valid } = parseList(value);
+        lists.enabled = values;
+        lists.orderPresent = true;
+        lists.orderValid = valid;
         continue;
       }
       if (key === keys.hidden) {
-        hidden = parseList(value).values;
+        const { values, valid } = parseList(value);
+        lists.hidden = values;
+        lists.hiddenPresent = true;
+        lists.hiddenValid = valid;
         continue;
       }
       if (!key.startsWith(keys.prefix)) continue;
@@ -79,40 +86,49 @@ export async function readIdbMods(): Promise<IdbMods> {
         map.set(key.slice(keys.prefix.length), value);
       }
     }
-    return { enabled, hidden, values: map, valueType: valueTypeOf(map) };
+    return { ...lists, values: map, valueType: valueTypeOf(map) };
   } finally {
     close(db);
   }
 }
 
-/** 只要两个列表键时用这个，避免把几十 MB 的模组包一起读出来 */
-export async function readIdbModLists(wanted = { order: true, hidden: true }): Promise<{
+export interface IdbModLists {
   enabled: string[];
   hidden: string[];
   /** 列表键本身在不在：缺了表示从没启用/禁用过，镜像时不该造出一个空列表 */
   orderPresent: boolean;
   hiddenPresent: boolean;
-  /** 键在但读不出来（坏 JSON / 不是数组）：这种值不能当成空列表写进包 */
+  /** 坏 JSON、不是数组或含非字符串成员：失败与有效空表不同。 */
   orderValid: boolean;
   hiddenValid: boolean;
-}> {
+}
+
+function emptyLists(): IdbModLists {
+  return { enabled: [], hidden: [], orderPresent: false, hiddenPresent: false, orderValid: false, hiddenValid: false };
+}
+
+/** 只要两个列表键时用这个，避免把几十 MB 的模组包一起读出来 */
+export async function readIdbModLists(wanted = { order: true, hidden: true }): Promise<IdbModLists> {
   const keys = modKeys();
   const db = await openDb(keys.db);
-  if (!db) return { enabled: [], hidden: [], orderPresent: false, hiddenPresent: false, orderValid: false, hiddenValid: false };
+  if (!db) return emptyLists();
   try {
     const tx = db.transaction(keys.store, 'readonly');
     const store = tx.objectStore(keys.store);
-    const [list, hidden] = await Promise.all([
+    // get() 返回 undefined 时，可能是没有键，也可能是记录里真的存了 undefined。
+    const [list, hidden, orderKey, hiddenKey] = await Promise.all([
       wanted.order ? request(store.get(keys.list)) : undefined,
       wanted.hidden ? request(store.get(keys.hidden)) : undefined,
+      wanted.order ? request(store.count(keys.list)) : 0,
+      wanted.hidden ? request(store.count(keys.hidden)) : 0,
     ]);
     const order = parseList(list);
     const hiddenList = parseList(hidden);
     return {
       enabled: order.values,
       hidden: hiddenList.values,
-      orderPresent: list !== undefined,
-      hiddenPresent: hidden !== undefined,
+      orderPresent: orderKey > 0,
+      hiddenPresent: hiddenKey > 0,
       orderValid: order.valid,
       hiddenValid: hiddenList.valid,
     };
@@ -289,15 +305,15 @@ export async function readModEntries(names: readonly string[]): Promise<Map<stri
 export function readLocalMods(): LocalMods {
   const keys = localModKeys();
   const values = new Map<string, string>();
-  let list: string[] = [];
+  const raw = readKey(keys.list);
+  const { values: list, valid: listValid } = parseList(raw);
   for (const key of listStorageKeys('local')) {
-    if (key === keys.list) list = parseList(readKey(key)).values;
-    else if (key.startsWith(keys.prefix)) {
+    if (key !== keys.list && key.startsWith(keys.prefix)) {
       const value = readKey(key);
       if (value !== null) values.set(key.slice(keys.prefix.length), value);
     }
   }
-  return { list, values };
+  return { list, listPresent: raw !== null, listValid, values };
 }
 
 /** 库在就直接写，不在才按加载器现在的布局建一个（单仓库、out-of-line key） */
@@ -359,18 +375,57 @@ export async function deleteModValue(name: string): Promise<DeleteResult> {
   return existed ? { status: 'deleted' } : { status: 'absent' };
 }
 
-/** 列表键原样写入；值为 null 表示删掉这个键 */
-export async function writeModList(name: 'order' | 'hidden', list: string[] | null): Promise<void> {
+/** 镜像仅删除仍然有效的列表；缺库/缺键不创建存储，也不计为删除。 */
+async function deleteModList(name: 'order' | 'hidden'): Promise<boolean> {
+  const keys = modKeys();
+  const db = await openDb(keys.db);
+  if (!db) return false;
+  const key = name === 'order' ? keys.list : keys.hidden;
+  try {
+    return await new Promise<boolean>((resolve, reject) => {
+      const tx = db.transaction(keys.store, 'readwrite');
+      let deleted = false;
+      let error: unknown;
+      tx.oncomplete = () => error === undefined ? resolve(deleted) : reject(error);
+      tx.onabort = () => reject(error ?? tx.error ?? messageError('deleteFailed'));
+      try {
+        const entry = tx.objectStore(keys.store).openCursor(key);
+        entry.onsuccess = () => {
+          const cursor = entry.result;
+          if (!cursor) return;
+          if (!parseList(cursor.value).valid) {
+            // 扫描后值可能已损坏；不能把内容未知的键当作已确认的有效列表删除。
+            error = messageError('deleteFailed');
+            return;
+          }
+          try {
+            cursor.delete();
+            deleted = true;
+          } catch (cause) {
+            error = cause;
+            abortQuietly(tx);
+          }
+        };
+      } catch (cause) {
+        error = cause;
+        abortQuietly(tx);
+      }
+    });
+  } finally {
+    close(db);
+  }
+}
+
+/** 列表键原样写入；null 表示删除，返回删除是否真实提交。 */
+export async function writeModList(name: 'order' | 'hidden', list: string[] | null): Promise<boolean> {
+  if (list === null) return deleteModList(name);
   const keys = modKeys();
   const { db, store } = await modDb();
   const key = name === 'order' ? keys.list : keys.hidden;
   try {
-    if (list === null) {
-      await deleteByKeys(db, store, [key]);
-      return;
-    }
     // 字符串数组用原始实现写：宿主 2.37 起的标记不会出现在列表里，字节与版本无关
     await putRecords(db, store, [{ key, value: stringifyJson(list) }]);
+    return true;
   } finally {
     close(db);
   }

@@ -109,21 +109,65 @@ export const ERROR_TYPES: ReadonlySet<string> = new Set([
 
 export const BOXED_TYPES: ReadonlySet<string> = new Set(['Number', 'String', 'Boolean', 'BigInt']);
 
-/** 允许的视图构造器：伪造的类型不能拿任意名字调 `globalThis` */
-export const VIEW_TYPES: ReadonlySet<string> = new Set([
-  'Int8Array',
-  'Uint8Array',
-  'Uint8ClampedArray',
-  'Int16Array',
-  'Uint16Array',
-  'Int32Array',
-  'Uint32Array',
-  'Float32Array',
-  'Float64Array',
-  'BigInt64Array',
-  'BigUint64Array',
-  'DataView',
+/** v1–v3 白名单；不得自动接纳引擎新增但旧读端不认识的视图。 */
+const ELEMENT_BYTES = new Map([
+  ['Int8Array', 1], ['Uint8Array', 1], ['Uint8ClampedArray', 1],
+  ['Int16Array', 2], ['Uint16Array', 2],
+  ['Int32Array', 4], ['Uint32Array', 4], ['Float32Array', 4],
+  ['Float64Array', 8], ['BigInt64Array', 8], ['BigUint64Array', 8], ['DataView', 1],
 ]);
+export const VIEW_TYPES: ReadonlySet<string> = new Set(ELEMENT_BYTES.keys());
+
+const typedArrayProto = Object.getPrototypeOf(Uint8Array.prototype) as object;
+const typedArrayName = Object.getOwnPropertyDescriptor(typedArrayProto, Symbol.toStringTag)!.get!;
+const typedArrayBuffer = Object.getOwnPropertyDescriptor(typedArrayProto, 'buffer')!.get!;
+const typedArrayByteOffset = Object.getOwnPropertyDescriptor(typedArrayProto, 'byteOffset')!.get!;
+const typedArrayByteLength = Object.getOwnPropertyDescriptor(typedArrayProto, 'byteLength')!.get!;
+const typedArrayValues = Uint8Array.prototype.values;
+const dataViewBuffer = Object.getOwnPropertyDescriptor(DataView.prototype, 'buffer')!.get!;
+const dataViewByteOffset = Object.getOwnPropertyDescriptor(DataView.prototype, 'byteOffset')!.get!;
+const dataViewByteLength = Object.getOwnPropertyDescriptor(DataView.prototype, 'byteLength')!.get!;
+const bufferByteLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength')!.get!;
+const bufferResizable = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'resizable')?.get;
+const bufferMaxByteLength = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'maxByteLength')?.get;
+
+export function bufferLimit(buffer: ArrayBuffer): number | undefined {
+  return bufferResizable?.call(buffer) ? bufferMaxByteLength!.call(buffer) as number : undefined;
+}
+
+/**
+ * 旧标记只写显式长度。只有视图末端以后仍有至少一个完整元素时，才可证明它不跟踪缓冲长度。
+ * 其余情况（包括尾端的固定视图）不猜测：探测只读内部元数据，既不 resize 源，也不克隆缓冲。
+ */
+export function fixedViewSpec(view: ArrayBufferView, path: string): {
+  buffer: ArrayBuffer; type: string; byteOffset: number; length: number;
+} {
+  const name = typedArrayName.call(view) as string | undefined;
+  const type = name ?? 'DataView';
+  const elementBytes = ELEMENT_BYTES.get(type);
+  if (elementBytes === undefined) return unsupported(type, path);
+  const buffer = (name === undefined ? dataViewBuffer : typedArrayBuffer).call(view) as ArrayBuffer;
+  let bufferLength: number;
+  try {
+    bufferLength = bufferByteLength.call(buffer) as number;
+  } catch {
+    return unsupported('SharedArrayBuffer', childPath(path, 'buffer'));
+  }
+  let byteLength: number;
+  let byteOffset: number;
+  try {
+    byteLength = (name === undefined ? dataViewByteLength : typedArrayByteLength).call(view) as number;
+    byteOffset = (name === undefined ? dataViewByteOffset : typedArrayByteOffset).call(view) as number;
+    // TypedArray 的 getter 会将分离 / 越界误报为零长。用常量成本的原生校验，不迭代元素。
+    if (name !== undefined && byteLength === 0) typedArrayValues.call(view as Uint8Array);
+  } catch {
+    return unsupported(type + ' (out of bounds)', path);
+  }
+  if (bufferResizable?.call(buffer) && bufferLength - byteOffset - byteLength < elementBytes) {
+    return unsupported(type + ' (resizable bounds)', path);
+  }
+  return { buffer, type, byteOffset, length: byteLength / elementBytes };
+}
 
 export function unsupported(type: string, path: string): never {
   throw messageError('unsupportedValue', type, path);
@@ -172,6 +216,8 @@ export function shapeOf(value: unknown): Shape {
   if (type === 'function' || type === 'symbol') return { kind: 'unsupported', type: type === 'function' ? 'Function' : 'Symbol' };
   if (type !== 'object') return { kind: 'scalar' };
 
+  if (Array.isArray(value)) return { kind: 'array' };
+  if (ArrayBuffer.isView(value)) return { kind: 'view' };
   const tag = tagOf(value as object);
   if (UNSUPPORTED_TAGS.has(tag)) return { kind: 'unsupported', type: tag };
   if (tag === 'Date') return { kind: 'date' };
@@ -184,22 +230,23 @@ export function shapeOf(value: unknown): Shape {
   if (tag === 'DOMException') return { kind: 'domerror' };
   if (GEOMETRY_TAGS.has(tag)) return { kind: 'geometry' };
   if (BOXED_TYPES.has(tag)) return { kind: 'boxed', type: tag };
-  if (ArrayBuffer.isView(value)) return { kind: 'view' };
-  if (Array.isArray(value)) return { kind: 'array' };
   if (tag === 'Map') return { kind: 'map' };
   if (tag === 'Set') return { kind: 'set' };
   return { kind: 'object' };
 }
 
-/** 数组里实际存在的索引；非索引的自有键结构化克隆不复制，这里同样忽略 */
-export function presentIndices(array: readonly unknown[]): number[] {
+/** 索引按数组自有键的原生顺序返回：成本随实际键数增长，不扫描稀疏数组的空洞。 */
+export function presentIndices(array: readonly unknown[], path: string): number[] {
   const out: number[] = [];
-  for (const key of Object.keys(array)) {
-    const index = Number(key);
-    if (!Number.isSafeInteger(index) || index < 0 || String(index) !== key || index >= array.length) continue;
+  for (const key of Reflect.ownKeys(array)) {
+    if (key === 'length') continue;
+    const index = typeof key === 'string' ? Number(key) : NaN;
+    if (!Number.isInteger(index) || index < 0 || index >= array.length || String(index) !== key) {
+      // 结构化克隆会保留可枚举字符串附加键；v3 数组标记只保留索引。
+      return unsupported('Array property', childPath(path, String(key)));
+    }
     out.push(index);
   }
-  out.sort((left, right) => left - right);
   return out;
 }
 
@@ -275,8 +322,12 @@ export function countRefs(root: unknown, basePath = ''): WeakMap<object, number>
         regExpLastIndex(object as RegExp, path);
         return;
       case 'array': {
-        for (const index of presentIndices(object as readonly unknown[])) {
-          child((object as readonly unknown[])[index], childPath(path, index), depth);
+        const array = object as readonly unknown[];
+        for (const index of presentIndices(array, path)) {
+          const itemPath = childPath(path, index);
+          const item = Object.getOwnPropertyDescriptor(array, String(index));
+          if (!item || !hasOwn(item, 'value')) return unsupported('Array accessor', itemPath);
+          child(item.value, itemPath, depth);
         }
         return;
       }
@@ -302,7 +353,8 @@ export function countRefs(root: unknown, basePath = ''): WeakMap<object, number>
         // 点按值编码，不参与引用表
         return;
       case 'view': {
-        child((object as ArrayBufferView).buffer, childPath(path, 'buffer'), depth);
+        const { buffer } = fixedViewSpec(object as ArrayBufferView, path);
+        child(buffer, childPath(path, 'buffer'), depth);
         return;
       }
       case 'object': {

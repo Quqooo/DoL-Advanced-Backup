@@ -1,4 +1,3 @@
-import { clearPackMapping } from '../core/mapping';
 import { invalidateLang, t } from '../ui/i18n';
 import { stateTemp, wikifyEval, withSyntheticEvent } from './env';
 
@@ -99,8 +98,6 @@ function leaveOverlay(): void {
   tabEl = null;
   tabBar = null;
   stopWatching();
-  // 离开面板就丢掉包内映射：它是外部输入，留着会改后续分组与导出的 mapping.json
-  clearPackMapping();
 }
 
 /**

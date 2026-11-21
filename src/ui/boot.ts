@@ -1,15 +1,18 @@
 import { applyRestorePack, dropRestorePack, loadRestorePack, type RestorePack } from '../app/selfRestore';
-import type { RestoreMode } from '../core/types';
+import { isAbort } from '../core/error';
+import type { Category, RestoreMode } from '../core/types';
 import { holdUnload } from '../host/unload';
 import type { SelfMod } from '../host/self';
+import { collectPackageWarnings } from '../restore/plan/warnings';
 import { tBoot } from './i18n';
 import { describeError, failureLines } from './error-text';
+import { restoreWarningLines } from './restore-warnings';
 
 /**
  * 恢复包的启动对话框。
  *
  * 只在「自己 zip 里有 manifest.json」时出现：五个选项（合并 / 覆盖 / 补缺 / 干净 / 取消），
- * 无论选哪个都会卸载自己；恢复成功后再无提示重载。不用游戏原生 Dialog——
+ * 写入成功且已卸载恢复包才自动重载；确认取消不卸载。不用游戏原生 Dialog——
  * 这时候 SugarCube 还没起来，原生 Dialog 依赖 UI bar。
  */
 
@@ -115,6 +118,12 @@ function openDialog(pack: RestorePack): void {
     el('p', 'margin:0 0 4px;color:#c9c4bc;', strings.restorePackIntro(pack.game, pack.modVersion, pack.entries)),
   );
   card.appendChild(el('p', 'margin:0 0 14px;color:#9b9ba4;font-size:12px;', strings.restorePackHint));
+  const warnings = restoreWarningLines(collectPackageWarnings(pack.bundle), strings);
+  if (warnings.length > 0) {
+    const list = el('ul', 'margin:0 0 14px;padding-inline-start:20px;max-height:25vh;overflow:auto;color:#d8b46a;overflow-wrap:anywhere;');
+    for (const line of warnings) list.appendChild(el('li', '', line));
+    card.appendChild(list);
+  }
 
   const status = el('p', 'margin:0 0 12px;min-height:18px;color:#9b9ba4;font-size:12px;');
   status.dataset.advbkBootStatus = '1';
@@ -142,71 +151,107 @@ function openDialog(pack: RestorePack): void {
     actions.appendChild(reload);
   };
 
-  const run = async (mode: RestoreMode): Promise<void> => {
+  function askDeletions(counts: Readonly<Partial<Record<Category, number>>>): Promise<boolean> {
+    const total = Object.values(counts).reduce<number>((sum, count) => sum + (count ?? 0), 0);
+    const other = counts.other ?? 0;
+    return new Promise(resolve => {
+      const decide = (approved: boolean): void => {
+        lock(true);
+        if (approved) status.textContent = strings.restorePackWorking;
+        resolve(approved);
+      };
+      const confirm = button(strings.startRestore, 'delete-confirm', true);
+      confirm.addEventListener('click', () => decide(true));
+      const back = button(strings.cancelAction, 'cancel');
+      back.addEventListener('click', () => decide(false));
+      actions.replaceChildren(confirm, back);
+      status.textContent = [strings.deletableCount(total), other > 0 ? strings.confirmOther(other) : ''].filter(Boolean).join(' ');
+      status.setAttribute('style', 'margin:0 0 12px;min-height:18px;color:#d8b46a;font-size:12px;');
+    });
+  }
+
+  async function uninstallAfterRestore(notes: string[]): Promise<void> {
     lock(true);
-    status.textContent = strings.restorePackWorking;
-    // 恢复在写存储：这期间刷新会留下半写状态。成功路径的重载在 try 内发起，
-    // finally 先释放守卫，浏览器不会再多问一次
     const releaseUnload = holdUnload();
     try {
-      const result = await applyRestorePack(pack, mode, info => {
-        status.textContent = `${strings.restorePackWorking} ${Math.round(info.ratio * 100)}%`;
-      });
-      if (result.failed > 0) {
-        // 有失败项就留着包，让用户能重试；数据已经写进去的部分下次重载会生效
-        fail(failureLines(result.failures, result.failures.length, strings).join(' · ') || `${result.failed}`);
+      if (!await dropRestorePack(pack)) {
+        status.textContent = [strings.restorePackAppliedDropFailed, ...notes].join(' ');
+        status.setAttribute('style', 'margin:0 0 12px;min-height:18px;color:#d8b46a;font-size:12px;');
+        const retry = button(strings.restorePackRetryDrop, 'retry-drop', true);
+        retry.addEventListener('click', () => void uninstallAfterRestore(notes));
+        const dismiss = button(strings.cancelAction, 'dismiss');
+        dismiss.addEventListener('click', () => overlay.remove());
+        actions.replaceChildren(retry, dismiss);
         return;
       }
-      await dropRestorePack(pack);
-      const notes: string[] = [];
+    } finally {
+      releaseUnload();
+    }
+    if (notes.length > 0) {
+      finish(notes.join(' '));
+      return;
+    }
+    status.textContent = strings.restorePackDone;
+    location.reload();
+  }
+
+  async function run(mode: RestoreMode): Promise<void> {
+    lock(true);
+    status.textContent = strings.restorePackWorking;
+    const releaseUnload = holdUnload();
+    const notes: string[] = [];
+    try {
+      const result = await applyRestorePack(pack, mode, {
+        confirmDeletions: askDeletions,
+        onProgress: info => {
+          status.textContent = `${strings.restorePackWorking} ${Math.round(info.ratio * 100)}%`;
+        },
+      });
+      if (result.cancelled) {
+        showModes();
+        status.textContent = strings.restoreCancelled;
+        return;
+      }
+      if (result.failed > 0) {
+        // 有失败项就留着包，让用户能重试；数据已经写进去的部分下次重载会生效。
+        showModes();
+        fail(failureLines(result.failures, result.failures.length, strings).join(' · ') || String(result.failed));
+        return;
+      }
       if (result.snapshotEmpty) notes.push(strings.autoSnapshotEmpty);
       if (result.snapshotTrimFailed) {
         notes.push(strings.autoSnapshotTrimFailed(describeError(result.snapshotTrimFailed, strings)));
       }
-      if (notes.length > 0) {
-        finish(notes.join(' '));
-        return;
-      }
-      status.textContent = strings.restorePackDone;
-      // 重载是本任务发起的：先撤守卫，避免浏览器再次询问
-      releaseUnload();
-      location.reload();
     } catch (error) {
-      fail(describeError(error, strings));
+      showModes();
+      if (!isAbort(error)) fail(describeError(error, strings));
+      return;
     } finally {
       releaseUnload();
     }
-  };
+    await uninstallAfterRestore(notes);
+  }
 
-  const cancel = async (): Promise<void> => {
+  async function cancel(): Promise<void> {
     lock(true);
-    await dropRestorePack(pack);
+    if (!await dropRestorePack(pack)) {
+      fail(strings.restorePackDropFailed);
+      return;
+    }
     status.textContent = strings.restorePackDropped;
     overlay.remove();
-  };
+  }
 
-  /** 干净恢复会删数据，在同一个对话框里再确认一次 */
-  const confirmClean = (): void => {
-    actions.replaceChildren();
-    actions.appendChild(
-      (() => {
-        // 完整名词：这里按钮表达的是「执行干净恢复」，不是模式列表里的选项
-        const node = button(strings.cleanTitle, 'clean-confirm', true);
-        node.addEventListener('click', () => void run('clean'));
-        return node;
-      })(),
-    );
-    actions.appendChild(
-      (() => {
-        const node = button(strings.cancelAction, 'cancel');
-        // 这一步的取消是「先不删了」，退回模式列表；卸载恢复包是外面那个取消
-        node.addEventListener('click', () => showModes());
-        return node;
-      })(),
-    );
+  /** 干净恢复先说明模式，实际差集由执行前的通用确认处理。 */
+  function confirmClean(): void {
+    const confirm = button(strings.cleanTitle, 'clean-confirm', true);
+    confirm.addEventListener('click', () => void run('clean'));
+    const back = button(strings.cancelAction, 'cancel');
+    back.addEventListener('click', showModes);
+    actions.replaceChildren(confirm, back);
     status.textContent = strings.restorePackCleanHint;
     status.setAttribute('style', 'margin:0 0 12px;min-height:18px;color:#d8b46a;font-size:12px;');
-  };
+  }
 
   const labels: Record<RestoreMode, string> = {
     merge: strings.modeMerge,

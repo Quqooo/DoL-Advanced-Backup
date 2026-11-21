@@ -52,11 +52,11 @@ const CHANNEL_FIELD: Record<MappingChannel, 'keys' | 'sessionKeys' | 'dbs'> = {
   db: 'dbs',
 };
 
+export type MappingTable = readonly ResolvedEntry[];
+
 let externals: MappingEntry[] = [];
-/** 恢复包自带的映射：优先级最高，打开新包时整体替换 */
-let packed: MappingEntry[] = [];
-/** 合并后的表；三层任何一层变动都失效 */
-let merged: readonly ResolvedEntry[] | null = null;
+/** 本机映射的缓存；只有外部注册会改变它 */
+let merged: MappingTable | null = null;
 
 /**
  * 同一个数组里重复的字符串规则直接判失败。
@@ -128,44 +128,31 @@ export function register(input: unknown): boolean {
   return ok;
 }
 
-/**
- * 恢复包自带的映射：整表替换，`list()` 里排在最前。
- *
- * 包是外部输入，调用方先用 `readPackMapping` 解析并校验。
- */
-export function setPackMapping(entries: readonly MappingEntry[]): void {
-  packed = [...entries];
-  merged = null;
-}
-
-/** 打开的包没带映射时清掉上一层，避免上一份包的表继续生效 */
-export function clearPackMapping(): void {
-  if (packed.length === 0) return;
-  packed = [];
-  merged = null;
-}
-
-/**
- * 三层按优先级排列：恢复包自带 → 第三方注册 → 内置表；同 `mod` 时前面的整条覆盖后面的。
- *
- * 结果按表缓存：`badgeFor` 每渲染一行调一次、`selfEntry` 每个模组条目调一次，
- * 每次都重建数组并复制十几个条目，几百行就是上万次无谓分配。
- * 返回的数组只读，调用方不得就地修改。
- */
-export function list(): readonly ResolvedEntry[] {
-  if (merged) return merged;
-  const out: ResolvedEntry[] = [];
+/** 同 mod 时整条取先出现的映射；不同 mod 按首条规则命中。 */
+function firstByMod(entries: ResolvedEntry[]): MappingTable {
   const taken = new Set<string>();
-  const push = (entry: MappingEntry, source: MappingSource): void => {
-    if (taken.has(entry.mod)) return;
+  return entries.filter(entry => {
+    if (taken.has(entry.mod)) return false;
     taken.add(entry.mod);
-    out.push({ ...entry, source });
-  };
-  for (const entry of packed) push(entry, 'pack');
-  for (const entry of externals) push(entry, 'external');
-  for (const entry of MAPPING) push(entry, 'builtin');
-  merged = out;
-  return out;
+    return true;
+  });
+}
+
+/** 本机只信第三方注册与内置映射，按这个顺序去重并缓存。 */
+export function list(): MappingTable {
+  return merged ??= firstByMod([
+    ...externals.map(entry => ({ ...entry, source: 'external' as const })),
+    ...MAPPING.map(entry => ({ ...entry, source: 'builtin' as const })),
+  ]);
+}
+
+/** 包内映射优先，但只返回给当前计划，绝不注册到本机表。entries 已由 readPackMapping 校验。 */
+export function mappingForPack(entries: readonly MappingEntry[], local = list()): MappingTable {
+  if (entries.length === 0) return local;
+  return firstByMod([
+    ...entries.map(entry => ({ ...entry, source: 'pack' as const })),
+    ...local,
+  ]);
 }
 
 /** 按身份取一批条目：导出时据此写包内映射表 */
@@ -179,8 +166,8 @@ export function entriesOfMods(mods: Iterable<string>): MappingEntry[] {
 }
 
 /** 按身份取条目：分组路径 `moddata/<mod>` 的后半段就是它 */
-export function byMod(mod: string): ResolvedEntry | undefined {
-  return list().find(entry => entry.mod === mod);
+export function byMod(mod: string, mapping = list()): ResolvedEntry | undefined {
+  return mapping.find(entry => entry.mod === mod);
 }
 
 /** 本模组在表里那一条：按自己的 boot.json name 认，不看显示文案怎么写 */
@@ -193,8 +180,8 @@ function rulesOf(entry: MappingEntry, channel: MappingChannel): readonly Rule[] 
 }
 
 /** 命中的条目与规则。按列表顺序取第一条命中的条目与规则 */
-export function matchOf(channel: MappingChannel, value: string): { entry: ResolvedEntry; rule: Rule } | null {
-  for (const entry of list()) {
+export function matchOf(channel: MappingChannel, value: string, mapping = list()): { entry: ResolvedEntry; rule: Rule } | null {
+  for (const entry of mapping) {
     for (const rule of rulesOf(entry, channel) ?? []) {
       if (matchesRule(rule, value)) return { entry, rule };
     }
@@ -226,14 +213,13 @@ export function ownersOf(channel: MappingChannel, value: string): readonly Resol
  * 条目行上的用途角标（「设置」「快照库」那种）。
  * 值可能是词条键也可能是字面量，解析交给界面层——`core` 不碰 i18n。
  */
-export function badgeFor(channel: MappingChannel, value: string): string {
-  const hit = matchOf(channel, value);
+export function badgeFor(channel: MappingChannel, value: string, mapping = list()): string {
+  const hit = matchOf(channel, value, mapping);
   return hit ? badgeOfRule(hit.rule) : '';
 }
 
-/** 只给测试用：清掉包内与外部两层，回到内置表 */
+/** 只给测试用：清掉外部注册，回到内置表 */
 export function resetExternal(): void {
   externals = [];
-  packed = [];
   merged = null;
 }

@@ -3,6 +3,7 @@ import type { Item } from '../core/item';
 import { databases } from '../store/idb';
 import { measureDatabase } from '../store/idb/dump';
 import { imagePackKeys } from '../store/modkeys';
+import { wholeDbGuard } from '../store/whole-db';
 import { measuredDbItem } from './dbitem';
 import type { CollectContext, Collector, CollectResult } from './index';
 
@@ -16,7 +17,8 @@ import type { CollectContext, Collector, CollectResult } from './index';
 export const imagePackCollector: Collector = {
   name: 'imagepacks',
   async collect(ctx: CollectContext): Promise<CollectResult> {
-    const keys = imagePackKeys();
+    const keys = ctx.group.imagePackDbs ?? imagePackKeys();
+    const group = { ...ctx.group, imagePackDbs: keys };
     const order: readonly { name: string; order: number }[] = [
       { name: keys.order, order: 0 },
       { name: keys.fileList, order: 1 },
@@ -25,10 +27,11 @@ export const imagePackCollector: Collector = {
     const present = new Set((await databases()).map(item => item.name));
     const items: Item[] = [];
 
+    const issue = wholeDbGuard();
     for (const entry of order) {
-      if (!present.has(entry.name)) continue;
+      if (!present.delete(entry.name) || issue(entry.name)) continue;
       const measure = await measureDatabase(entry.name);
-      items.push(measuredDbItem(idbAddr(entry.name), ctx, measure, { order: entry.order }));
+      items.push(measuredDbItem(idbAddr(entry.name), { ...ctx, group }, measure, { order: entry.order }));
     }
 
     return { collector: 'imagepacks', items };

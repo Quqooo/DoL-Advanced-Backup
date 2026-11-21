@@ -1,6 +1,5 @@
 import { MOD_HIDDEN_ADDR, MOD_ORDER_ADDR } from '../../core/address';
-import { messageError } from '../../core/error';
-import type { Item } from '../../core/item';
+import { isAbort, messageError, throwIfAborted } from '../../core/error';
 import type { RestoreMode } from '../../core/types';
 import { sha256Hex } from '../../pack/blob';
 import { readIdbModLists, readModNames } from '../../store/mods';
@@ -62,12 +61,14 @@ async function installPicked(state: ApplyState): Promise<ModEnv> {
   const items = picked(state, 'mod');
   const localLists = await readIdbModLists();
   const localNames = await readModNames();
+  throwIfAborted(state.signal);
   const existing = new Set([...localNames.idb, ...localNames.local]);
   const installed: string[] = [];
 
   let seen = 0;
   for (const item of items) {
     state.tick?.(++seen / items.length);
+    throwIfAborted(state.signal);
     const entry = manifest.mods.items.find(candidate => modAddrOf(candidate) === item.addr);
     if (!entry) {
       bump(state.report, item, 'skipped');
@@ -88,11 +89,13 @@ async function installPicked(state: ApplyState): Promise<ModEnv> {
       if (bytes.length !== entry.bytes || (await sha256Hex(bytes)) !== entry.sha256) {
         throw messageError('modVerifyFailed');
       }
+      throwIfAborted(state.signal);
       await installMod(item.addr, bytes);
       installed.push(stored);
       bump(state.report, item, 'applied');
       state.report.needsReload = true;
     } catch (error) {
+      if (state.signal?.aborted && isAbort(error)) throw error;
       fail(state.report, 'mods', stored, error);
     }
   }
@@ -100,88 +103,77 @@ async function installPicked(state: ApplyState): Promise<ModEnv> {
   return { installed, existing, localLists };
 }
 
-/**
- * 两份列表与启用列表。
- *
- * 顺序：禁用列表先算（它决定启用集合），再写顺序列表，最后把新装的追加进去。
- */
+/** 损坏的列表不是空表：不知道禁用意图时，不能写另一份列表来猜。 */
+function corruptList(lists: LocalLists): 'order' | 'hidden' | undefined {
+  if (lists.orderPresent && !lists.orderValid) return 'order';
+  if (lists.hiddenPresent && !lists.hiddenValid) return 'hidden';
+}
+
+function listLabel(list: 'order' | 'hidden') {
+  return messageError(list === 'order' ? 'labelModOrder' : 'labelModHidden');
+}
+
+/** 镜像前保留候选在本机原来的成员身份；是否真的卸载要等执行后重读。 */
+function retainPending(target: readonly string[], original: readonly string[], dropped: ReadonlySet<string>): string[] {
+  return union(target.filter(name => !dropped.has(name)), original.filter(name => dropped.has(name)));
+}
+
 async function applyLists(state: ApplyState, env: ModEnv): Promise<void> {
+  throwIfAborted(state.signal);
   const { installed, existing, localLists } = env;
   const section = state.plan.sections.mods;
-  const orderItem: Item | undefined = state.plan.items.find(item => item.addr === MOD_ORDER_ADDR);
-  const hiddenItem: Item | undefined = state.plan.items.find(item => item.addr === MOD_HIDDEN_ADDR);
-  // 装完再读一遍：只有这一轮真有值的才算装上，包里的其它名字不能进列表。
-  // 一条都读不到时不修改列表：通常是宿主改过键名或库尚未建立，清空的代价高于保留几个无效条目。
-  const present = new Set((await readModNames()).idb);
-  // 镜像随后会卸载这些包：先移除它们，避免写入列表后成为无效条目
-  for (const name of state.droppedMods) present.delete(name);
-  const prune = (list: readonly string[]): string[] => (present.size > 0 ? keepInstalled(list, present) : [...list]);
-
-  // 重载后生效的禁用列表先算出来，启用列表要按它过滤（见下面的「禁用优先」）。
-  // 没勾选这一条就整条不动；勾了就按模式替换或合并。
-  const hiddenPlan = hiddenItem && section?.hidden && state.selected.has(MOD_HIDDEN_ADDR)
-    ? { item: hiddenItem, target: prune(listTarget(state.plan.mode, localLists.hidden, section.hidden)) }
-    : null;
-  const hiddenAfter = hiddenPlan?.target ?? [...localLists.hidden];
-  const disabled = new Set(hiddenAfter);
-
-  // 覆盖与干净按包内那份替换，合并与补缺以本机顺序为基准（见 `listTarget`）。
-  // 没勾顺序列表时沿用本机那份，但仍要按重载后生效的禁用列表过滤。
+  const orderItem = picked(state, 'mod-list').find(item => item.addr === MOD_ORDER_ADDR);
+  const hiddenItem = picked(state, 'mod-list').find(item => item.addr === MOD_HIDDEN_ADDR);
   const packedOrder = section?.order;
-  const orderPicked = Boolean(packedOrder && orderItem && state.selected.has(MOD_ORDER_ADDR));
-  const enabled = withoutDisabled(
-    prune(orderPicked && packedOrder ? listTarget(state.plan.mode, localLists.enabled, packedOrder) : localLists.enabled),
-    hiddenAfter,
-  );
+  const packedHidden = section?.hidden;
+  if (!(orderItem && packedOrder) && !(hiddenItem && packedHidden) && installed.length === 0) return;
 
-  let orderWritten = false;
-  if (orderPicked && orderItem) {
-    try {
-      await writeModList(MOD_ORDER_ADDR, enabled);
-      orderWritten = true;
-      // 列表一模一样时没有「重载才生效」的变更，不必催用户重载
-      if (!sameList(enabled, localLists.enabled)) state.report.needsReload = true;
-      bump(state.report, orderItem, 'applied');
-    } catch (error) {
-      fail(state.report, 'mods', messageError('labelModOrder'), error);
-    }
+  const corrupt = corruptList(localLists);
+  if (corrupt) {
+    fail(state.report, 'mods', listLabel(corrupt), messageError('modListCorrupt'));
+    return;
   }
+  // 以实际会加载的 IDB 层为准；层读不到和已确认没有可加载模组不是一回事。
+  const names = await readModNames();
+  throwIfAborted(state.signal);
+  if (!names.opened) {
+    fail(state.report, 'mods', 'mods', messageError('openModDbFailed'));
+    return;
+  }
+  const present = new Set(names.idb);
+  const retain = (base: readonly string[], packed: readonly string[]): string[] =>
+    keepInstalled(retainPending(listTarget(state.plan.mode, base, packed), base, state.droppedMods), present);
 
-  if (hiddenPlan) {
-    let hiddenWritten = false;
+  let hidden = localLists.hidden;
+  let hiddenWritten = false;
+  if (hiddenItem && packedHidden) {
+    const target = retain(hidden, packedHidden);
+    throwIfAborted(state.signal);
     try {
-      await writeModList(MOD_HIDDEN_ADDR, hiddenPlan.target);
+      await writeModList(MOD_HIDDEN_ADDR, target);
       hiddenWritten = true;
-      if (!sameList(hiddenPlan.target, localLists.hidden)) state.report.needsReload = true;
-      bump(state.report, hiddenPlan.item, 'applied');
+      if (!localLists.hiddenPresent || !sameList(target, hidden)) state.report.needsReload = true;
+      hidden = target;
+      bump(state.report, hiddenItem, 'applied');
     } catch (error) {
-      fail(state.report, 'mods', messageError('labelModHidden'), error);
-    }
-    // 只恢复禁用列表时也要收紧启用列表：宿主只看启用列表（见 `withoutDisabled`）。
-    // 禁用列表写入成功后才调整启用列表，避免写入失败时改变模组状态。
-    // 包内没有顺序列表（`order: null`）时也要收紧：那个名字本机可能正在启用。
-    if (hiddenWritten && !orderWritten && !sameList(enabled, localLists.enabled)) {
-      try {
-        await writeModList(MOD_ORDER_ADDR, enabled);
-        state.report.needsReload = true;
-        // 勾了顺序列表时上面已经记过一次，这里不重复计数
-        if (orderItem && !state.selected.has(MOD_ORDER_ADDR)) bump(state.report, orderItem, 'applied');
-      } catch (error) {
-        fail(state.report, 'mods', messageError('labelModOrder'), error);
-      }
+      fail(state.report, 'mods', listLabel('hidden'), error);
     }
   }
 
-  // 新装的模组不在启用列表里就追加到末尾：只写进库不启用，重载后什么都不会发生。
-  // 本机原本就有的模组不动，用户自己禁用的状态要保留——包内把它标成禁用时不追加。
-  const fresh = installed.filter(name => !enabled.includes(name) && !existing.has(name) && !disabled.has(name));
-  if (fresh.length > 0) {
-    try {
-      await writeModList(MOD_ORDER_ADDR, union(enabled, fresh));
-      state.report.needsReload = true;
-    } catch (error) {
-      fail(state.report, 'mods', messageError('labelModEnabled'), error);
-    }
+  const explicitOrder = orderItem && packedOrder != null;
+  const base = explicitOrder ? retain(localLists.enabled, packedOrder) : localLists.enabled;
+  const fresh = installed.filter(name => present.has(name) && !existing.has(name) && !state.droppedMods.has(name));
+  const enabled = withoutDisabled(union(base, fresh), hidden);
+  if (!explicitOrder && (!(hiddenWritten || fresh.length > 0) || sameList(enabled, localLists.enabled))) return;
+  throwIfAborted(state.signal);
+  try {
+    await writeModList(MOD_ORDER_ADDR, enabled);
+    if (!localLists.orderPresent || !sameList(enabled, localLists.enabled)) state.report.needsReload = true;
+    const item = orderItem ?? state.plan.items.find(item => item.addr === MOD_ORDER_ADDR);
+    if (item) bump(state.report, item, 'applied');
+  } catch (error) {
+    const label = !explicitOrder && !hiddenWritten ? messageError('labelModEnabled') : listLabel('order');
+    fail(state.report, 'mods', label, error);
   }
 }
 
@@ -197,9 +189,10 @@ export function reconciledOrder(
   enabled: readonly string[],
   installed: readonly string[],
   hidden: readonly string[],
+  doNotEnable: ReadonlySet<string> = new Set(),
 ): string[] {
   const present = new Set(installed);
-  return withoutDisabled(union(keepInstalled(enabled, present), installed), hidden);
+  return withoutDisabled(union(keepInstalled(enabled, present), installed.filter(name => !doNotEnable.has(name))), hidden);
 }
 
 /**
@@ -221,55 +214,45 @@ export function reconciledHidden(
   return hidden.filter(name => present.has(name) && !active.has(name));
 }
 
-/**
- * 对账：写入与镜像之后，重新核对两份列表。
- *
- * 不变量：**启用列表 ∪ 禁用列表 = 已安装集合**，不多也不少。
- * - 不多：镜像卸载的包、库中已不存在的名字，两份列表都不保留；
- * - 不漏：已安装却不在任一列表中的模组，重载后不会加载，因此补进启用列表（禁用的除外）。
- *
- * 所有模式都执行：`applyLists` 只清理本轮写入的那一份列表，未写入的那一份，
- * 以及合并 / 补缺只取并集不清理的情况，都由这里处理。只处理 IDB 层，
- * local 层模组不进入这份列表。
- */
-export async function reconcileModOrder(state: ApplyState): Promise<void> {
+/** 对账以实际可读的 IDB 层为准，不把无法确认卸载的包加入启用列表。 */
+export async function reconcileModOrder(state: ApplyState, preserveMissingOrder = false): Promise<void> {
+  throwIfAborted(state.signal);
   const lists = await readIdbModLists();
-  // 库读不到（库名不对 / 宿主未就绪）时不修改：此时「已装为空」不成立，清空会删除用户的列表。
-  // 库可读但没有任何模组时，列表中的名字全部无效，照常清除。
-  const names = await readModNames().catch(() => null);
-  if (!names?.opened) return;
-  /**
-   * 以存储层的实际内容为准，不用写入前的预计删除名单。
-   *
-   * 镜像可能整体跳过（该分类本轮写失败）或某一条卸载失败：那些包还在，名字就必须留在
-   * 列表里，否则重载后不再加载、禁用状态也丢。真正删掉的包此时已经读不到，会自然清掉。
-   */
+  const corrupt = corruptList(lists);
+  if (corrupt) {
+    // applyLists 可能已报告损坏；不重复计数或用空表覆盖。
+    if (!state.report.failures.some(item => item.category === 'mods')) {
+      fail(state.report, 'mods', listLabel(corrupt), messageError('modListCorrupt'));
+    }
+    return;
+  }
+  const names = await readModNames();
+  throwIfAborted(state.signal);
+  if (!names.opened) return;
   const installed = names.idb;
-
-  // 先算禁用列表（同时去重），启用列表再按它过滤：重复项归入启用，无效名字两份都清除
+  // 交集仍以宿主实际加载状态为准；未列出的镜像候选既不自启，也不补造禁用意图。
   const hiddenTarget = reconciledHidden(lists.hidden, installed, lists.enabled);
-  const orderTarget = reconciledOrder(lists.enabled, installed, hiddenTarget);
-  if (!sameList(orderTarget, lists.enabled)) {
+  const orderTarget = reconciledOrder(lists.enabled, installed, hiddenTarget, state.droppedMods);
+  // 若镜像删除了顺序键，不应因仍有受保护模组就把这个键重新建回来。
+  if ((!preserveMissingOrder || lists.orderPresent) && !sameList(orderTarget, lists.enabled)) {
     try {
       await writeModList(MOD_ORDER_ADDR, orderTarget);
       state.report.needsReload = true;
       const item = state.plan.items.find(candidate => candidate.addr === MOD_ORDER_ADDR);
-      // 勾了顺序列表时 applyLists 已经记过一次，这里不重复计数
       if (item && !state.selected.has(MOD_ORDER_ADDR)) bump(state.report, item, 'applied');
     } catch (error) {
-      fail(state.report, 'mods', messageError('labelModOrder'), error);
+      fail(state.report, 'mods', listLabel('order'), error);
     }
   }
 
-  // 禁用列表同样清除多余名字：保留已卸载包的名字会使下次「启用」多出一项
-  if (!lists.hiddenPresent) return;
-  if (sameList(hiddenTarget, lists.hidden)) return;
+  throwIfAborted(state.signal);
+  if (!lists.hiddenPresent || sameList(hiddenTarget, lists.hidden)) return;
   try {
     await writeModList(MOD_HIDDEN_ADDR, hiddenTarget);
     state.report.needsReload = true;
     const item = state.plan.items.find(candidate => candidate.addr === MOD_HIDDEN_ADDR);
     if (item && !state.selected.has(MOD_HIDDEN_ADDR)) bump(state.report, item, 'applied');
   } catch (error) {
-    fail(state.report, 'mods', messageError('labelModHidden'), error);
+    fail(state.report, 'mods', listLabel('hidden'), error);
   }
 }

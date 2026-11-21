@@ -1,5 +1,6 @@
 import { formatBytes, formatTotal } from '../../../core/format';
 import { ITEM_KIND_BY_ID, type Item } from '../../../core/item';
+import type { MappingTable } from '../../../core/mapping';
 import { t } from '../../i18n';
 import { dom } from '../dom';
 import { badgesOf, itemLabel, subPartsOf, type GroupNode } from './model';
@@ -34,6 +35,7 @@ export function sameRow(left: Item, right: Item): boolean {
 }
 
 export interface LeafHooks {
+  mapping?: (() => MappingTable | undefined) | undefined;
   /** 不可勾时的原因；空串表示可勾 */
   lockOf(item: Item): string;
   onToggle(item: Item, checked: boolean): void;
@@ -98,7 +100,7 @@ export function leafNode(
     gutter,
     box,
     main,
-    ...badgesOf(item).map(badge => dom('span', 'advbk-badge', badge)),
+    ...badgesOf(item, hooks.mapping?.()).map(badge => dom('span', 'advbk-badge', badge)),
     dom('span', 'advbk-row-size', sizeText(item)),
   );
   wrap.appendChild(row);

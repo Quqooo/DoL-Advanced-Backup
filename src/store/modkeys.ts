@@ -1,6 +1,8 @@
 import {
   IMAGE_FILELIST_DB,
   IMAGE_ORDER_DB,
+  IMAGE_ORDER_KEY,
+  IMAGE_ORDER_STORE,
   IMAGE_STORE_DB,
   MOD_DB,
   MOD_HIDDEN_KEY,
@@ -9,6 +11,7 @@ import {
   MOD_LOCAL_LIST_KEY,
   MOD_LOCAL_PREFIX_BASE,
 } from '../core/constants';
+import type { ImagePackDbNames } from '../core/group';
 
 /**
  * 加载器把数据放在哪：库名、仓库名、键名都可能被 `loaderKeyConfig` 改掉。
@@ -35,12 +38,16 @@ export interface ModKeys {
 function loaderCandidates(): unknown[] {
   const w = typeof window === 'undefined' ? null : (window as any);
   if (!w) return [];
-  try {
-    return [w.modUtils?.getModLoader?.(), w.modUtils?.pSC2DataManager?.getModLoader?.(), w.modSC2DataManager?.getModLoader?.()];
-  } catch {
-    /* 老版本接口不齐，下面按拿到的继续 */
-    return [];
+  const out: unknown[] = [];
+  for (const owner of [w.modUtils, w.modUtils?.pSC2DataManager, w.modSC2DataManager]) {
+    try {
+      const loader = owner?.getModLoader?.();
+      if (loader && !out.includes(loader)) out.push(loader);
+    } catch {
+      /* 此入口失效不代表其他入口不可用。 */
+    }
   }
+  return out;
 }
 
 function loaderCtor(
@@ -88,6 +95,18 @@ export function modKeys(): ModKeys {
   };
 }
 
+/** 整库操作不能把未识别的加载器库当作普通库。 */
+export function confirmedModDb(): string | null {
+  const name = loaderCtor(loaderCandidates(), 'getIndexDBLoader')?.dbName;
+  if (typeof name === 'string' && name !== '') return name;
+  // 只有明确的改名或已知不支持改名的加载器才能证明真实目标。
+  const configured = keyOf(MOD_DB, keyConfigs());
+  if (configured !== MOD_DB) return configured;
+  if (typeof document === 'undefined') return MOD_DB;
+  const version = /^v?2\.(\d+)(?:\.|$)/.exec(String((window as any).modUtils?.version ?? ''));
+  return version && Number(version[1]) < 21 ? MOD_DB : null;
+}
+
 /** 只有 localStorage 层用得上，采集器拼认领地址时要它与实际键名一致 */
 export function localModKeys(): { list: string; prefix: string } {
   const keys = modKeys();
@@ -115,9 +134,8 @@ function keyConfigs(): any[] {
   return out;
 }
 
-/** 一个默认名在当前宿主上的实际名字：`getLoaderKey` 只认注册过的键，其余原样返回 */
-export function loaderKeyOf(name: string): string {
-  for (const config of keyConfigs()) {
+function keyOf(name: string, configs: ReturnType<typeof keyConfigs>): string {
+  for (const config of configs) {
     const get = config?.getLoaderKey;
     if (typeof get !== 'function') continue;
     try {
@@ -130,11 +148,35 @@ export function loaderKeyOf(name: string): string {
   return name;
 }
 
-/** 图像包（BeautySelectorAddon）的三个库名：与模组键一样可能被宿主改名 */
-export function imagePackKeys(): { order: string; fileList: string; imageStore: string } {
+/** 一个默认名在当前宿主上的实际名字：`getLoaderKey` 只认注册过的键，其余原样返回 */
+export function loaderKeyOf(name: string): string {
+  return keyOf(name, keyConfigs());
+}
+
+function imageDbs(configs: ReturnType<typeof keyConfigs>): ImagePackDbNames {
   return {
-    order: loaderKeyOf(IMAGE_ORDER_DB),
-    fileList: loaderKeyOf(IMAGE_FILELIST_DB),
-    imageStore: loaderKeyOf(IMAGE_STORE_DB),
+    order: keyOf(IMAGE_ORDER_DB, configs),
+    fileList: keyOf(IMAGE_FILELIST_DB, configs),
+    imageStore: keyOf(IMAGE_STORE_DB, configs),
+  };
+}
+
+/** 图像包（BeautySelectorAddon）的三个库名：与模组键一样可能被宿主改名。 */
+export function imagePackKeys(): ImagePackDbNames {
+  return imageDbs(keyConfigs());
+}
+
+export interface ImagePackLayout extends ImagePackDbNames {
+  readonly orderStore: string;
+  readonly orderKey: string;
+}
+
+export function imagePackLayout(): ImagePackLayout {
+  const configs = keyConfigs();
+  const names = imageDbs(configs);
+  return {
+    ...names,
+    orderStore: IMAGE_ORDER_STORE === IMAGE_ORDER_DB ? names.order : keyOf(IMAGE_ORDER_STORE, configs),
+    orderKey: keyOf(IMAGE_ORDER_KEY, configs),
   };
 }

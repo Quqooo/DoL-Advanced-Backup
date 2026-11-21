@@ -167,7 +167,7 @@ export function createSnapshotPane(deps: SnapshotPaneDeps): { el: HTMLElement; r
             })
           : false;
         const outcome = await snapshotExport(id, { wrap });
-        toast(t().snapshotExported(outcome.name));
+        toast(t().snapshotExported(outcome.name, outcome.method === 'download'));
         return;
       }
       if (kind === 'rename') {

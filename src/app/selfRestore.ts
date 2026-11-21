@@ -7,9 +7,9 @@ import { entriesOf } from '../core/manifest';
 import { bytesSource, openZip } from '../core/zipread';
 import { decodeEntry } from '../pack/codec';
 import { sha256Hex } from '../pack/blob';
-import { openBundle, type Bundle } from '../restore/bundle';
-import { bundleOfZip, isZipBundleUnreadable } from '../restore/zipbundle';
-import { importBundle, type ImportResult } from './import';
+import { BundleBudgetExceeded, decodeOpeningEntry, openBundle, openLimits, openingEntryLimits, type Bundle } from '../restore/bundle';
+import { boundedHandleNames, bundleOfZip, isZipBundleUnreadable, readHandleEntry } from '../restore/zipbundle';
+import { importBundle, type ImportBundleRequest, type ImportResult } from './import';
 import { findStoredPacks, identifyStoredPack, removeStoredPackCopies, type StoredPackIdentity } from './packStore';
 
 /**
@@ -37,10 +37,15 @@ export interface RestorePack {
  */
 type PackIdentity = ReadonlyMap<string, string>;
 
-async function identityOf(mod: SelfMod): Promise<PackIdentity> {
+async function identityOf(mod: SelfMod, limits = openLimits(), names = [...boundedHandleNames(mod.zip, limits)]): Promise<PackIdentity> {
   const hashes = new Map<string, string>();
-  for (const [name, entry] of Object.entries(mod.zip.files)) {
-    if (!entry.dir) hashes.set(name, await sha256Hex(await entry.async('uint8array')));
+  // 先校验受开包预算限制的小条目。大分区保持逐条读取，不建立整包副本。
+  for (const small of [true, false]) {
+    for (const name of names) {
+      if (Boolean(openingEntryLimits(name, limits)) !== small) continue;
+      const data = await readHandleEntry(mod.zip.files[name], name, limits, { allowOpaqueFallback: true });
+      hashes.set(name, await sha256Hex(data));
+    }
   }
   return hashes;
 }
@@ -56,12 +61,14 @@ async function sameStoredPack(identity: PackIdentity, bytes: Uint8Array): Promis
       }
       return true;
     }
-    const zip = await openZip(bytesSource(bytes));
-    const entries = zip.entries.filter(entry => !entry.name.endsWith('/'));
-    if (entries.length !== identity.size || new Set(entries.map(entry => entry.name)).size !== identity.size) return false;
-    for (const entry of entries) {
-      const data = await zip.read(entry.name, decodeEntry);
-      if (!data || await sha256Hex(data) !== identity.get(entry.name)) return false;
+    const limits = openLimits();
+    const zip = await openZip(bytesSource(bytes), limits);
+    const names = zip.entries.filter(entry => !entry.name.endsWith('/')).map(entry => entry.name);
+    if (names.length !== identity.size || new Set(names).size !== identity.size || names.some(name => !identity.has(name))) return false;
+    for (const [name, hash] of identity) {
+      const cap = openingEntryLimits(name, limits);
+      const data = await zip.read(name, cap ? decodeOpeningEntry : decodeEntry, cap);
+      if (!data || await sha256Hex(data) !== hash) return false;
     }
     return true;
   } catch {
@@ -69,22 +76,42 @@ async function sameStoredPack(identity: PackIdentity, bytes: Uint8Array): Promis
   }
 }
 
+/** 先过开包小条目预算，再按原规则逐条计算强身份；大条目仍然逐个读取。 */
 async function bundleFromStorage(mod: SelfMod): Promise<Bundle | null> {
   let match: Bundle | null = null;
   try {
-    const identity = await identityOf(mod);
+    const limits = openLimits();
+    const names = [...boundedHandleNames(mod.zip, limits)];
+    let identity: PackIdentity | undefined;
+    // 在碰不透明旧句柄之前，必须有一份通过预算校验且目录一致的存储候选。
+    // 兼容分支只能在宿主 async() 返回后比较大小，仍需 SHA-256 验证唯一同源。
     for await (const { bytes } of findStoredPacks()) {
       // 容器正常走内层字节入口；这里没有可验证的外层读路径就拒绝回退。
-      if (isModPack(bytes) || !await sameStoredPack(identity, bytes)) continue;
+      if (isModPack(bytes)) continue;
+      const bundle = await openBundle(bytes).catch(() => null);
+      if (!bundle) continue;
+      const candidates = [...bundle.names].filter(name => !name.endsWith('/'));
+      if (candidates.length !== names.length || names.some(name => !bundle.has(name))) continue;
+      identity ??= await identityOf(mod, limits, names);
       try {
-        const bundle = await openBundle(bytes);
+        let same = true;
+        for (const name of candidates) {
+          if (await sha256Hex(await bundle.read(name)) !== identity.get(name)) {
+            same = false;
+            break;
+          }
+        }
+        bundle.releaseLegacyIdb?.();
+        if (!same) continue;
         if (match) return null;
         match = bundle;
-      } catch {
-        // 匹配项无法作为恢复来源时继续检查其余候选，不按文件名选一个
+      } catch (error) {
+        if (error instanceof BundleBudgetExceeded && error.subject !== 'ZIP') throw error;
+        // 无法打开或验证的候选不用于恢复，继续检查其余候选。
       }
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof BundleBudgetExceeded) throw error;
     return null;
   }
   return match;
@@ -115,36 +142,45 @@ export async function loadRestorePack(mod: SelfMod | null = selfMod()): Promise<
   };
 }
 
-export function applyRestorePack(
-  pack: RestorePack,
-  mode: RestoreMode,
-  onProgress?: (progress: Progress) => void,
-): Promise<ImportResult> {
-  // 恢复包是个一次性的壳：包里那份正本正是要装上去的东西，不能按「不覆盖自己」跳过。
-  // keepSelf 也置假：它的语义是「把这台机器变成包里的样子」，干净 / 覆盖下本模组自己的包与数据
-  // 照删——否则正本装上了，本机那份旧数据还留着，状态两边各一半。
+type SelfRestoreActions = Pick<Required<ImportBundleRequest>, 'confirmDeletions'> & {
+  onProgress?: (progress: Progress) => void;
+};
+
+export function applyRestorePack(pack: RestorePack, mode: RestoreMode, actions: SelfRestoreActions): Promise<ImportResult> {
+  // 正本与它的数据照常装入；只有当前一次性恢复壳的存储地址不能被写入或镜像删除。
   return importBundle({
     bundle: pack.bundle,
     mode,
     selfPack: true,
     keepSelf: false,
-    ...(onProgress ? { onProgress } : {}),
+    confirmDeletions: actions.confirmDeletions,
+    resolveSelfPackNames: async () => {
+      try {
+        const names = new Set((await matchingStoredCopies(pack.mod)).map(copy => copy.name));
+        if (names.size > 0) return names;
+      } catch {
+        // 散列或存储读取失败不能推断源壳没有出现在删除/写入目标中。
+      }
+      throw messageError('selfPackIdentity');
+    },
+    ...(actions.onProgress ? { onProgress: actions.onProgress } : {}),
   });
 }
 
-/**
- * 卸载自己。ModLoader 的缓存条目只带 boot.json 的 name、不带存储键，只能回存储层按内容认；
- * 写后必须刷新页面才生效，调用方负责重载。
- */
-export async function dropRestorePack(pack: RestorePack): Promise<boolean> {
+async function matchingStoredCopies(mod: SelfMod): Promise<StoredPackIdentity[]> {
+  const identity = await identityOf(mod);
   const matches: StoredPackIdentity[] = [];
+  for await (const { bytes, name, layer } of findStoredPacks()) {
+    if (await sameStoredPack(identity, bytes)) matches.push(await identifyStoredPack({ name, layer }, bytes));
+  }
+  return matches;
+}
+
+/** 写后必须刷新页面才生效；只有证实已卸载时才返回成功。 */
+export async function dropRestorePack(pack: RestorePack): Promise<boolean> {
   try {
-    const identity = await identityOf(pack.mod);
-    for await (const { bytes, name, layer } of findStoredPacks()) {
-      if (await sameStoredPack(identity, bytes)) matches.push(await identifyStoredPack({ name, layer }, bytes));
-    }
+    return await removeStoredPackCopies(await matchingStoredCopies(pack.mod));
   } catch {
     return false;
   }
-  return removeStoredPackCopies(matches);
 }

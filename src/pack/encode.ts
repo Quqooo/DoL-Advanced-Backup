@@ -34,8 +34,10 @@ import {
   SPARSE_MIN_LENGTH,
   UNDEF,
   VIEW,
+  bufferLimit,
   childPath,
   countRefs,
+  fixedViewSpec,
   hasOwn,
   isRecord,
   presentIndices,
@@ -45,7 +47,6 @@ import {
   tagOf,
   unsupported,
   useSparseForm,
-  VIEW_TYPES,
 } from './graph';
 
 const PREFIX_TEXT = PREFIX;
@@ -256,27 +257,24 @@ function encodeNode(value: unknown, blobs: BlobTable, ctx: Context, path: string
     }
     case 'buffer': {
       const buffer = value as ArrayBuffer;
-      const resizable = (buffer as ArrayBuffer & { resizable?: boolean }).resizable === true;
-      return blobs.add(toBytes(buffer)).then(blob => {
+      const maxByteLength = bufferLimit(buffer);
+      const bytes = new Uint8Array(buffer);
+      // 伸缩缓冲不把活视图留在 BlobTable：哈希与随后写出的字节必须来自同一个快照。
+      return blobs.add(maxByteLength === undefined ? bytes : new Uint8Array(bytes)).then(blob => {
         const out: Record<string, unknown> = { [BUFFER]: true, [BLOB]: blob.file };
-        if (resizable) {
+        if (maxByteLength !== undefined) {
           out[RESIZABLE] = true;
-          out[MAX_BYTE_LENGTH] = (buffer as ArrayBuffer & { maxByteLength?: number }).maxByteLength;
+          out[MAX_BYTE_LENGTH] = maxByteLength;
         }
         return withId(out, id);
       });
     }
     case 'view': {
-      const view = value as ArrayBufferView;
-      const name = tagOf(view);
-      if (!VIEW_TYPES.has(name)) return unsupported(name, path);
-      const inner = encodeNode(view.buffer, blobs, ctx, childPath(path, 'buffer'), depth + 1);
-      const spec = (encodedBuffer: unknown): Record<string, unknown> => {
-        const body: Record<string, unknown> = { type: name, buffer: encodedBuffer, byteOffset: view.byteOffset };
-        if (name === 'DataView') body.byteLength = (view as DataView).byteLength;
-        else body.length = (view as unknown as { length: number }).length;
-        return withId({ [VIEW]: body }, id);
-      };
+      const { buffer, type, byteOffset, length } = fixedViewSpec(value as ArrayBufferView, path);
+      const inner = encodeNode(buffer, blobs, ctx, childPath(path, 'buffer'), depth + 1);
+      const spec = (encodedBuffer: unknown): Record<string, unknown> => withId({
+        [VIEW]: { type, buffer: encodedBuffer, byteOffset, [type === 'DataView' ? 'byteLength' : 'length']: length },
+      }, id);
       return isThenable(inner) ? inner.then(spec) : spec(inner);
     }
     case 'blob':
@@ -395,9 +393,9 @@ function encodeNode(value: unknown, blobs: BlobTable, ctx: Context, path: string
       const array = value as unknown[];
       const length = array.length;
       if (length > MAX_SPARSE_LENGTH) throw messageError('valueShapeInvalid', path);
-      // 稀疏形态只对长数组有意义；短数组直接按索引走，省去一次 Object.keys 与排序
+      // 预扫已经检查了自有属性；这里只对长数组再收集索引，以选择稀疏形态。
       if (length > SPARSE_MIN_LENGTH) {
-        const present = presentIndices(array);
+        const present = presentIndices(array, path);
         if (useSparseForm(length, present.length)) {
           const values = settleList(present, index =>
             encodeNode(array[index], blobs, ctx, childPath(path, index), depth + 1));

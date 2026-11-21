@@ -1,18 +1,18 @@
-import { abortError, messageError, messageOf, throwIfAborted } from '../core/error';
+import { abortError, isAbort, messageError, messageOf, throwIfAborted } from '../core/error';
 import type { Category, RestoreMode } from '../core/types';
 import type { Item } from '../core/item';
 import { base64ToBytes } from '../core/format';
 import type { Progress } from '../core/progress';
 import { gameVersion } from '../host/env';
-import { dbNameReady, waitForDbName } from '../host/game';
+import { dbName, dbNameReady, waitForDbName } from '../host/game';
 import { summarize } from '../restore/report';
 import { restorePackage } from '../restore';
 import type { RestoreFailure, RestorePlan } from '../restore/types';
-import { clearPackMapping, setPackMapping } from '../core/mapping';
-import { readPackMapping } from '../core/mapping/pack';
+import type { MappingTable } from '../core/mapping';
 import { openBundle, type Bundle } from '../restore/bundle';
 import { planRestore } from '../restore/plan';
 import { countDeletions, prepareMirror } from '../restore/plan/mirror';
+import { confirmedModDb } from '../store/modkeys';
 import { readPrefs } from '../store/prefs';
 import { useGameDb } from '../store/saves';
 import { autoSnapshot } from '../snapshot/auto';
@@ -67,35 +67,16 @@ export interface ImportResult {
   /** 回滚点已写成，但清理旧自动槽失败 */
   snapshotTrimFailed?: unknown;
   needsReload: boolean;
-}
-
-/**
- * 装上包内映射：优先级高于第三方注册与内置表。
- *
- * 读包前必须装好，`planRestore` 用当前映射给地址分组；没有这个文件就清掉上一层，
- * 避免上一份包的映射表继续生效。
- */
-async function applyPackMapping(bundle: Bundle): Promise<void> {
-  if (!bundle.has('mapping.json')) {
-    clearPackMapping();
-    return;
-  }
-  try {
-    setPackMapping(readPackMapping(await bundle.readJson<unknown>('mapping.json')));
-  } catch {
-    // 坏文件按没有处理：包内其余部分照常恢复
-    clearPackMapping();
-  }
+  cancelled?: true;
 }
 
 /** 只读包、不动存储：界面用它先算「将删除 N 项」与警告 */
 export async function inspectPackage(
   source: Uint8Array | Blob,
   mode?: RestoreMode,
-  onItems?: (items: readonly Item[]) => void,
+  onItems?: (items: readonly Item[], mapping: MappingTable) => void,
 ) {
   const bundle = await openBundle(source);
-  await applyPackMapping(bundle);
   // 本机扫描与建树并行：建树只读 manifest 里的索引，两者都用不着对方
   const scanned = scan(true);
   // 它要到各段读完才被 await：这段空档里失败不能算成未处理的拒绝
@@ -111,13 +92,14 @@ export async function inspectPackage(
 type ImportExecution = Omit<ImportRequest, 'source' | 'bytes'> & {
   /** 面板按执行扫描的差集确认。编程接口直接执行，不弹对话框。 */
   confirmDeletions?: (deletions: Readonly<Partial<Record<Category, number>>>) => Promise<boolean>;
+  resolveSelfPackNames?: () => Promise<ReadonlySet<string>>;
 };
 
 export type ImportBundleRequest = ImportExecution & { bundle: Bundle };
 
 let importRunning = false;
 
-/** 包内映射是全局状态：恢复必须互斥，且只有锁持有者能在收尾时清理它 */
+/** 恢复写入必须互斥；只读预览不占这把锁。 */
 async function exclusiveImport<T>(task: () => Promise<T>): Promise<T> {
   if (importRunning) throw messageError('importBusy');
   importRunning = true;
@@ -125,7 +107,6 @@ async function exclusiveImport<T>(task: () => Promise<T>): Promise<T> {
     return await task();
   } finally {
     importRunning = false;
-    clearPackMapping();
   }
 }
 
@@ -152,25 +133,31 @@ export async function importPackage(request: ImportRequest): Promise<ImportResul
 }
 
 /** 自动快照遇到不支持的类型时先问用户：跳过会留下不完整的回滚点 */
-async function autoSnapshotWithChoice(scanned: Awaited<ReturnType<typeof scan>>): Promise<Awaited<ReturnType<typeof autoSnapshot>>> {
-  const input = { scanned, game: gameVersion(), mod: VERSION };
+async function autoSnapshotWithChoice(scanned: Awaited<ReturnType<typeof scan>>, signal?: AbortSignal): Promise<Awaited<ReturnType<typeof autoSnapshot>>> {
+  const input = { scanned, game: gameVersion(), mod: VERSION, ...(signal ? { signal } : {}) };
   try {
     return await autoSnapshot(input);
   } catch (error) {
+    if (isAbort(error)) throw error;
+    throwIfAborted(signal);
     if (!(await askSkipUnsupported(error))) throw error;
+    throwIfAborted(signal);
     return autoSnapshot({ ...input, onUnsupported: 'skip' });
   }
 }
 
 async function runImport(bundle: Bundle, request: ImportExecution): Promise<ImportResult> {
-  await applyPackMapping(bundle);
   // 恢复包在 inject_early 阶段就跑到这里，`idb.init(Story.domId)` 可能还没执行：
   // 先等库名定下来，否则扫描的跳过名单与写入目标都会落在占位库上
-  useGameDb(await waitForDbName());
+  await waitForDbName();
+  useGameDb(dbName(), dbNameReady());
   const prefs = readPrefs();
   const mode = request.mode ?? prefs.restoreMode;
   // 库名没定下来时干净恢复的删除边界不可信：拒绝执行，让用户重载后再试
-  if (mode === 'clean' && !dbNameReady()) throw messageError('dbNameUnknown');
+  if (mode === 'clean') {
+    if (!dbNameReady()) throw messageError('dbNameUnknown');
+    if (confirmedModDb() === null) throw messageError('hostDbUnknown', 'ModLoader');
+  }
   // 干净恢复的「保留本模组」：调用方没指定就跟随偏好（默认开）
   const keepSelf = request.keepSelf ?? prefs.keepSelf;
   const emit = (phase: Progress['phase'], ratio: number, label?: string): void => {
@@ -200,6 +187,7 @@ async function runImport(bundle: Bundle, request: ImportExecution): Promise<Impo
       bundle,
       mode,
       ...(request.selfPack ? { selfPack: true } : {}),
+      ...(request.resolveSelfPackNames ? { resolveSelfPackNames: request.resolveSelfPackNames } : {}),
       ...(request.selected ? { selected: new Set(request.selected) } : {}),
       ...(keepSelf ? {} : { keepSelf: false }),
       scanned,
@@ -213,11 +201,12 @@ async function runImport(bundle: Bundle, request: ImportExecution): Promise<Impo
         emit('snapshot', BAND.snapshot[0]);
         if (!prefs.autoSnapshot) return;
         try {
-          const snap = await autoSnapshotWithChoice(scanned);
+          const snap = await autoSnapshotWithChoice(scanned, request.signal);
           // 扫描为空只是没有可备份的内容；恢复照常，界面提示一次
           if (snap.meta === null) snapshotEmpty = true;
           if (snap.trimError) snapshotTrimFailed = snap.trimError;
         } catch (error) {
+          if (isAbort(error)) throw error;
           // 留不下回滚点就不动手：四种模式一致。干净恢复会删数据，其它模式也会覆盖本机内容
           throw messageError('importSnapshotFailed', error instanceof Error ? error : messageOf(error));
         } finally {
@@ -239,7 +228,7 @@ async function runImport(bundle: Bundle, request: ImportExecution): Promise<Impo
     // 已进入写入阶段就不能保留旧扫描：失败或取消可能发生在部分写入之后
     if (writing) resetScan();
   }
-  emit('apply', 1);
+  if (!report.cancelled) emit('apply', 1);
 
   const summary = summarize(report);
   const deleted = Object.values(report.deleted).reduce<number>((sum, value) => sum + (value ?? 0), 0);
@@ -254,6 +243,7 @@ async function runImport(bundle: Bundle, request: ImportExecution): Promise<Impo
     ...(snapshotEmpty ? { snapshotEmpty } : {}),
     ...(snapshotTrimFailed ? { snapshotTrimFailed } : {}),
     needsReload: report.needsReload,
+    ...(report.cancelled ? { cancelled: true } : {}),
   };
 }
 

@@ -2,6 +2,7 @@ import { makeGroupContext, type GroupContext } from '../core/group';
 import type { Item, ScanResult } from '../core/item';
 import { currentOrigin } from '../host/env';
 import { listStorageKeys, type StorageKind } from '../store/local';
+import { imagePackKeys } from '../store/modkeys';
 import { readIdbModLists, readModNames } from '../store/mods';
 import { imagePackCollector } from './imagepacks';
 import { progressCollector, sessionCollector, settingsCollector } from './keys';
@@ -109,7 +110,7 @@ export function absorb(result: CollectResult, into: { items: Item[]; claims: Rec
  * 不必等整轮跑完才第一次显示。
  */
 export async function collectAll(onBatch?: (items: readonly Item[]) => void): Promise<ScanResult> {
-  const group = makeGroupContext(currentOrigin());
+  const group = makeGroupContext(currentOrigin(), undefined, imagePackKeys());
   const items: Item[] = [];
   const errors: Record<string, unknown> = {};
   const claims: Record<string, string[]> = {};

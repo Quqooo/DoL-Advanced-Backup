@@ -2,10 +2,12 @@ import { throwIfAborted } from '../core/error';
 import { bytesToBase64 } from '../core/format';
 import { entriesOf } from '../core/manifest';
 import { gameVersion } from '../host/env';
+import { dbName, dbNameReady } from '../host/game';
 import { openSink, type SaveMethod } from '../host/download';
 import { readSelfScript } from '../host/self';
 import type { Progress } from '../core/progress';
 import { pack, packName, packTo, type PackOptions, type PackResult } from '../pack';
+import { useGameDb } from '../store/db-identity';
 import { readPrefs } from '../store/prefs';
 import { scan } from './scan';
 
@@ -53,6 +55,8 @@ async function optionsOf(overrides?: Partial<PackOptions>): Promise<PackOptions>
 
 /** 一次导出的全部入参：字节版与流式版共用，避免重复计算地址表 */
 async function prepare(request: ExportRequest, createdAt: string) {
+  // 指定地址的编程接口不会先扫描，也需要当前宿主的库名。
+  if (typeof document !== 'undefined') useGameDb(dbName(), dbNameReady());
   const selected = request.selected
     ? new Set(request.selected)
     : new Set((await scan()).items.map(item => item.addr));

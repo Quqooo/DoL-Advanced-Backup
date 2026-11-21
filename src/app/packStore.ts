@@ -96,6 +96,7 @@ export async function identifyStoredPack(location: StoredPackLocation, bytes: Ui
 async function* takeStoredPacks(
   packs: readonly StoredPackIdentity[],
   ready: () => boolean,
+  verifyRemoval = false,
 ): AsyncGenerator<{ pack: StoredPack; removed: boolean }> {
   if (packs.length === 0 || !ready()) return;
   const reader = await openModReader({ idb: packs.some(pack => pack.layer === 'idb') });
@@ -113,7 +114,8 @@ async function* takeStoredPacks(
       }
       if (!ready()) return;
       const removed = await (layer === 'idb' ? removeMod(name) : removeModLocal(name));
-      yield { pack: { name, layer, bytes }, removed };
+      const confirmed = !verifyRemoval || (await reader.readLayer(layer, name)) === undefined;
+      yield { pack: { name, layer, bytes }, removed: removed && confirmed };
     }
   } finally {
     reader.close();
@@ -137,9 +139,11 @@ export async function removeStoredPacks(
   return { first, checked };
 }
 
-/** 自恢复包只卸载与自己的条目哈希匹配过的副本。 */
+/** 自恢复包只卸载内容匹配的副本；每个原匹配层都必须证实已卸载。 */
 export async function removeStoredPackCopies(packs: readonly StoredPackIdentity[]): Promise<boolean> {
-  let removed = false;
-  for await (const result of takeStoredPacks(packs, () => true)) removed ||= result.removed;
-  return removed;
+  let removed = 0;
+  for await (const result of takeStoredPacks(packs, () => true, true)) {
+    if (result.removed) removed++;
+  }
+  return removed > 0 && removed === packs.length;
 }

@@ -1,6 +1,7 @@
 import { MOD_HIDDEN_ADDR, MOD_ORDER_ADDR } from '../../../core/address';
 import { formatTotal } from '../../../core/format';
 import type { Item } from '../../../core/item';
+import type { MappingTable } from '../../../core/mapping';
 import { matchedPreset, selectionOf, type NamedPreset } from '../../../core/presets';
 import type { Preset } from '../../../core/types';
 import { t } from '../../i18n';
@@ -42,6 +43,8 @@ export interface CheckTree {
 }
 
 export interface CheckTreeOptions {
+  /** 恢复树使用当前来源自己的显示映射；省略时读本机映射。 */
+  mapping?: () => MappingTable | undefined;
   /**
    * 不可勾的条目，返回原因（显示在行的悬停提示里）；返回 false 表示可勾。
    * 用于「包里有、但这台机器不该恢复」的条目，例如快照库。
@@ -304,7 +307,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
    */
   function applyView(mode: 'collapse' | 'expand' | 'main'): void {
     // 树只建一次：折叠状态按它算，渲染也用它
-    const tree = buildTree(items);
+    const tree = buildTree(items, options.mapping?.());
     /** 展开的分组里的条目：只有它们才会露出体积列 */
     const shown: Item[] = [];
     for (const node of walk(tree)) {
@@ -360,7 +363,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
     queueMicrotask(() => measure(need));
   }
 
-  const leafHooks = { lockOf, onToggle: toggle };
+  const leafHooks = { lockOf, onToggle: toggle, mapping: options.mapping };
 
   function renderLeaf(item: Item): LeafEl {
     const built = leafNode(item, leafHooks);
@@ -523,7 +526,7 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
   function render(tree?: readonly Node[]): void {
     if (!tree) {
       // 增量：按新模型把现有节点对一遍，只为新条目建 DOM
-      rootEls = reconcile(body, buildTree(items), rootEls);
+      rootEls = reconcile(body, buildTree(items, options.mapping?.()), rootEls);
       return;
     }
     // 批量折叠改的是整棵树的折叠状态，整段重来更省心

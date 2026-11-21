@@ -2,7 +2,7 @@ import { MOD_HIDDEN_ADDR, MOD_ORDER_ADDR, nameOfAddr, parseAddr, slotOfAddr } fr
 import { formatStamp } from '../../../core/format';
 import { categoryOfGroup, type Item } from '../../../core/item';
 import type { Category } from '../../../core/types';
-import { badgeFor, byMod } from '../../../core/mapping';
+import { badgeFor, byMod, type MappingTable } from '../../../core/mapping';
 import { mappingLabel } from '../../label';
 import { compareVersion, modVersionParts } from '../../../core/version';
 import { currentLang, t, tText } from '../../i18n';
@@ -96,7 +96,7 @@ export interface GroupNode {
 export type Node = GroupNode | LeafNode;
 
 /** 分组标题：已知路径查表，模组数据取标签，未识别数据取域名 */
-export function groupTitle(group: string): string {
+export function groupTitle(group: string, mapping?: MappingTable): string {
   const strings = t();
   if (group === 'saves') return strings.groups.saves;
   const known = strings.subgroups[group];
@@ -104,7 +104,7 @@ export function groupTitle(group: string): string {
   if (group.startsWith('moddata/')) {
     // 分组名是模组名（身份），显示文案由映射条目给；表里没有就显示模组名
     const mod = group.slice('moddata/'.length);
-    const entry = byMod(mod);
+    const entry = byMod(mod, mapping);
     return entry ? mappingLabel(entry.label, entry.source) : mod;
   }
   if (group.startsWith('other/')) return strings.currentOrigin(group.slice('other/'.length));
@@ -171,7 +171,7 @@ export function subPartsOf(item: Item): SubPart[] {
  * 用途标签由映射表给（哪条规则写了 `badge` 就显示哪个，值可以是词条键也可以是字面量），
  * 按地址反查——`Item` 不带角标，包格式因此不受影响。
  */
-export function badgesOf(item: Item): string[] {
+export function badgesOf(item: Item, mapping?: MappingTable): string[] {
   const out: string[] = [];
   // 模组包这一行就是那个模组本身，自身标记留在行上；模组数据由分组行承担
   if (item.kind === 'mod' && item.flags?.self) out.push(t().selfBadge);
@@ -181,13 +181,13 @@ export function badgesOf(item: Item): string[] {
   if (!parsed) return out;
   switch (parsed.scheme) {
     case 'ls':
-      out.push(tText(badgeFor('key', parsed.name)));
+      out.push(tText(badgeFor('key', parsed.name, mapping)));
       break;
     case 'ss':
-      out.push(tText(badgeFor('sessionKey', parsed.name)));
+      out.push(tText(badgeFor('sessionKey', parsed.name, mapping)));
       break;
     case 'idb':
-      out.push(tText(badgeFor('db', parsed.name)));
+      out.push(tText(badgeFor('db', parsed.name, mapping)));
       break;
     default:
       // 存档、模组包没有映射通道
@@ -245,9 +245,9 @@ function draftOf(group: string, categories: Map<Category, Draft>): Draft {
 }
 
 /** 中间形状 → 渲染用的节点；父分组的合计含全部后代，勾选才覆盖整棵子树 */
-function toGroup(draft: Draft, category: Category, level: number): GroupNode {
+function toGroup(draft: Draft, category: Category, level: number, mapping?: MappingTable): GroupNode {
   const entries: Node[] = draft.items.map(item => ({ kind: 'leaf', item }));
-  for (const child of draft.children.values()) entries.push(toGroup(child, category, level + 1));
+  for (const child of draft.children.values()) entries.push(toGroup(child, category, level + 1, mapping));
   sortEntries(entries);
 
   const all = [...draft.items];
@@ -263,7 +263,7 @@ function toGroup(draft: Draft, category: Category, level: number): GroupNode {
   return {
     kind: 'group',
     id: draft.id,
-    title: draft.id === category ? t().groups[category] : groupTitle(draft.id),
+    title: draft.id === category ? t().groups[category] : groupTitle(draft.id, mapping),
     ...(groupSub ? { sub: groupSub } : {}),
     ...(ownGroup ? { badge: t().selfBadge } : {}),
     category,
@@ -274,7 +274,7 @@ function toGroup(draft: Draft, category: Category, level: number): GroupNode {
 }
 
 /** 分类 → 分组 → 条目；存档 / 进度 / 设置先收进「游戏数据」 */
-export function buildTree(items: readonly Item[]): Node[] {
+export function buildTree(items: readonly Item[], mapping?: MappingTable): Node[] {
   // 一次分桶，同路径的条目直接进入已找到的分组。
   const categories = new Map<Category, Draft>();
   const drafts = new Map<string, Draft>();
@@ -301,7 +301,7 @@ export function buildTree(items: readonly Item[]): Node[] {
     const draft = categories.get(category);
     if (!draft) continue;
     const inGame = GAME_CATEGORIES.has(category);
-    const node = toGroup(draft, category, inGame ? 1 : 0);
+    const node = toGroup(draft, category, inGame ? 1 : 0, mapping);
     if (inGame) {
       game.children.push(node);
       game.all.push(...node.all);
