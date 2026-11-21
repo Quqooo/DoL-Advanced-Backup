@@ -45,15 +45,23 @@ export async function applySaves(state: ApplyState): Promise<void> {
       fail(state.report, 'saves', item.addr, messageError('saveUndecodable'));
       continue;
     }
-    writes.push({ slot, data });
     const detailData = detail ? asRecord(createDecoder(state.format, state.resolve).decode(detail.data)) : null;
+    if (detail && (!detailData || Object.getPrototypeOf(detailData) !== Object.prototype)) {
+      // 有详情但解码结果不是记录：不可当成「缺详情」而删除本机那份。
+      fail(state.report, 'saves', item.addr, messageError('saveUndecodable'));
+      continue;
+    }
+    writes.push({ slot, data });
     if (detailData) detailWrites.push({ slot, data: detailData });
     applied.push(item);
   }
 
   if (writes.length === 0) return;
   try {
-    const written = await writeSaves(writes, detailWrites, state.plan.mode === 'missing');
+    const mode = state.plan.mode;
+    const written = await writeSaves(writes, detailWrites, mode === 'missing', {
+      removeMissingDetails: mode === 'overwrite' || mode === 'clean',
+    });
     for (const item of applied) bump(state.report, item, written.has(slotOfAddr(item.addr)!) ? 'applied' : 'skipped');
   } catch (error) {
     fail(state.report, 'saves', messageError('labelSaveDb'), error);

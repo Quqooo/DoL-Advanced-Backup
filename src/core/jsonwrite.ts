@@ -3,12 +3,13 @@
  *
  * 为什么不直接用 `JSON.stringify`：整段输出必须先合并成一条 JS 字符串（V8 单串上限
  * 2^29-24 字符，超了抛 `Invalid string length`），再编码成字节。整库分区 143 MB，
- * 这两步要多占 400 MB 峰值；本模块边遍历边写字节，额外峰值只有一块 256 KB 缓冲。
+ * 这两步要多占 400 MB 峰值；本模块按块写字节，单个大值也不会先分配整段 UTF-8。
  *
  * 输出与 `JSON.stringify` 逐字节一致，边界由 `scripts/test/jsonwrite.mjs` 钉住。
  * 只面向 `pack/encode.ts` 产出的 JSON 安全形状：循环引用会一直递归下去，
- * 带 `toJSON` 的对象整体交给 `JSON.stringify` 处理。
+ * 对带 `toJSON` 的对象，先取它的返回值再写。
  */
+import { stringifyJson } from './json';
 
 /** 分块落点：压缩流、文件流、内存缓冲都按这个接口接 */
 export interface JsonSink {
@@ -28,32 +29,58 @@ export interface JsonWriter {
 }
 
 const QUOTE = 0x22;
-const QUOTE_BYTES = Uint8Array.of(QUOTE);
 const encoder = new TextEncoder();
 
-/**
- * 需要转义的字符：引号、反斜杠、C0 控制符，以及代理项。
- * 代理项一律走转义分支：孤立代理必须写成 `\udXXX`，而 `encodeInto` 会把它换成 U+FFFD。
- */
-const ESCAPE = /["\\\u0000-\u001f\ud800-\udfff]/;
+// Unicode 模式把合法代理对看作一个码点，只有孤立的代理项才需要 JSON 转义。
+const ESCAPE = /["\\\u0000-\u001f\ud800-\udfff]/u;
+const BASIC_ESCAPE = /["\\\u0000-\u001f]/;
+const isWellFormed = (String.prototype as String & { isWellFormed?: () => boolean }).isWellFormed;
+
+function needsEscape(text: string): boolean {
+  // 新内核用原生代理项检查，避免 Unicode 正则逐个扫描大字符串的每个码点。
+  if (text.length >= 4096 && isWellFormed) return BASIC_ESCAPE.test(text) || !isWellFormed.call(text);
+  return ESCAPE.test(text);
+}
 
 const DEFAULT_CHUNK = 256 * 1024;
 const MIN_CHUNK = 64;
 
+function encodeChunk(text: string, start: number, bytes: Uint8Array): TextEncoderEncodeIntoResult {
+  let end = Math.min(start + bytes.length, text.length);
+  // encodeInto 不会写半个码点，但传进去的切片也必须以完整码点结尾。
+  const last = text.charCodeAt(end - 1);
+  if (end < text.length && last >= 0xd800 && last <= 0xdbff) end--;
+  return encoder.encodeInto(text.slice(start, end), bytes);
+}
+
+/** 字符串按 JSON 转义后的精确 UTF-8 大小，计数时不保留输出字节。 */
+export function jsonStringByteLength(text: string): number {
+  const escaped = needsEscape(text);
+  const body = escaped ? stringifyJson(text) : text;
+  const quotes = escaped ? 0 : 2;
+  if (body.length * 3 <= DEFAULT_CHUNK) return quotes + encoder.encode(body).length;
+  const scratch = new Uint8Array(DEFAULT_CHUNK);
+  let total = quotes;
+  for (let start = 0; start < body.length;) {
+    const { read, written } = encodeChunk(body, start, scratch);
+    start += read;
+    total += written;
+  }
+  return total;
+}
+
 export function createJsonWriter(sink: JsonSink, chunkSize = DEFAULT_CHUNK): JsonWriter {
-  let buf = new Uint8Array(Math.max(MIN_CHUNK, chunkSize));
+  const buf = new Uint8Array(Math.max(MIN_CHUNK, chunkSize));
   let at = 0;
   let chain: Promise<void> = Promise.resolve();
   /** 用对象包一层：sink 抛出 `null` 时也要能与「没有失败」区分 */
   let failure: { error: unknown } | null = null;
 
-  /**
-   * 分块串行落地。不 await 是为了让遍历保持同步；sink 比遍历慢时会在内存里排队，
-   * 压缩流不会，调用方也可以在条目之间 `flush()` 收一次。
-   */
-  const emit = (chunk: Uint8Array): void => {
-    if (failure !== null) return;
-    chain = chain.then(() => sink.write(chunk)).catch((error: unknown) => {
+  // 同步遍历只排队写入动作；大字符串排队的是文本，不是整段待写的字节。
+  const enqueue = (write: () => void | Promise<void>): void => {
+    chain = chain.then(() => {
+      if (failure === null) return write();
+    }).catch((error: unknown) => {
       failure = { error };
     });
   };
@@ -61,40 +88,56 @@ export function createJsonWriter(sink: JsonSink, chunkSize = DEFAULT_CHUNK): Jso
   const spill = (): void => {
     if (at === 0) return;
     // 必须复制：缓冲马上会被复用，交给 sink 的视图不能指向它
-    emit(buf.slice(0, at));
+    const chunk = buf.slice(0, at);
+    enqueue(() => sink.write(chunk));
     at = 0;
   };
 
   const ensure = (need: number): void => {
-    if (at + need <= buf.length) return;
-    spill();
-    if (need > buf.length) buf = new Uint8Array(need);
+    if (at + need > buf.length) spill();
   };
 
-  /** 只写 ASCII：结构符号、数字、布尔 */
+  /** 只写短 ASCII 片段：结构符号、数字、布尔 */
   const ascii = (text: string): void => {
     ensure(text.length);
     for (let index = 0; index < text.length; index++) buf[at++] = text.charCodeAt(index);
   };
 
+  const raw = (json: string): void => {
+    const need = json.length * 3;
+    if (need <= buf.length) {
+      ensure(need);
+      at += encoder.encodeInto(json, buf.subarray(at)).written;
+      return;
+    }
+    spill();
+    enqueue(async () => {
+      for (let start = 0; start < json.length;) {
+        const chunk = new Uint8Array(Math.min(buf.length, (json.length - start) * 3));
+        const { read, written } = encodeChunk(json, start, chunk);
+        // 不能复用这块：STORE 等 sink 可以保留它。等当前块落地才分配下一块。
+        await sink.write(chunk.subarray(0, written));
+        start += read;
+      }
+    });
+  };
+
   const string = (text: string): void => {
-    // 转义分支要整串一次编码：`\uXXXX` 是 ASCII，但中文与 emoji 仍按 UTF-8 原样写出。
-    // 每个码元最多 3 字节（代理对是 2 码元 4 字节），两个引号另算。
-    const body = ESCAPE.test(text) ? JSON.stringify(text).slice(1, -1) : text;
-    const need = body.length * 3 + 2;
+    if (needsEscape(text)) {
+      raw(stringifyJson(text));
+      return;
+    }
+    const need = text.length * 3 + 2;
     if (need <= buf.length) {
       ensure(need);
       buf[at++] = QUOTE;
-      at += encoder.encodeInto(body, buf.subarray(at)).written;
+      at += encoder.encodeInto(text, buf.subarray(at)).written;
       buf[at++] = QUOTE;
       return;
     }
-    // 单个字符串比整块缓冲还大：先落掉现有内容再整串编码，不能对半劈——
-    // 按缓冲区边界切分会把代理对拆成两个 U+FFFD，写出与 JSON.stringify 不一致的字节
-    spill();
-    emit(QUOTE_BYTES);
-    emit(encoder.encode(body));
-    emit(QUOTE_BYTES);
+    ascii('"');
+    raw(text);
+    ascii('"');
   };
 
   const write = (value: unknown): void => {
@@ -151,12 +194,6 @@ export function createJsonWriter(sink: JsonSink, chunkSize = DEFAULT_CHUNK): Jso
       write(item);
     }
     ascii('}');
-  };
-
-  const raw = (json: string): void => {
-    // 不转义：调用方保证是 JSON 语法片段或 JSON.stringify 的结果
-    ensure(json.length * 3);
-    at += encoder.encodeInto(json, buf.subarray(at)).written;
   };
 
   return {

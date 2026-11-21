@@ -67,7 +67,7 @@ export function mirrorCandidates(
     // 快照库是本模组的数据：勾着「保留本模组」时一直留着，关掉才进删除名单。
     // 单列一条而不是只靠 `flags.self`：那个标记由采集器给，删库的判据不该依赖它会一直被设上。
     if (keepSelf && isSnapshotAddr(item.addr)) return false;
-    if (keepSelf && item.flags?.self) return false;
+    if (keepSelf && (item.flags?.self || (item.kind === 'mod' && item.flags?.modIdentityUnknown))) return false;
     if (scope !== 'all' && !scope.has(item.group)) return false;
     return true;
   });

@@ -11,7 +11,8 @@ import {
 } from '../core/address';
 import { textByteLength } from '../core/format';
 import { messageError } from '../core/error';
-import { createJsonWriter, type JsonSink } from '../core/jsonwrite';
+import { stringifyJson } from '../core/json';
+import { createJsonWriter, jsonStringByteLength, type JsonSink } from '../core/jsonwrite';
 import { legacyHasSave } from '../core/legacy';
 import type { IndexDb, IndexKey, IndexSave, ManifestIndex } from '../core/manifest';
 import { sanitizeName } from '../core/naming';
@@ -111,20 +112,21 @@ function encodedBytes(value: unknown, blobBytes: ReadonlyMap<string, number>): n
       if (Array.isArray(range) && typeof range[1] === 'number') return range[1];
       const known = blobBytes.get(file);
       if (known !== undefined) return known;
-      return textByteLength(JSON.stringify(value));
+      return jsonSize(value);
     }
-    let total = 2;
-    for (const [key, item] of Object.entries(record)) {
-      total += textByteLength(JSON.stringify(key)) + 1 + encodedBytes(item, blobBytes);
+    const entries = Object.entries(record);
+    let total = 2 + Math.max(0, entries.length - 1);
+    for (const [key, item] of entries) {
+      total += jsonStringByteLength(key) + 1 + encodedBytes(item, blobBytes);
     }
     return total;
   }
-  return textByteLength(JSON.stringify(value) ?? 'null');
+  return jsonSize(value);
 }
 
-/** 键值在 `keys.json` 里的字节数（字符串按 JSON 转义后的长度算） */
+/** 包内 JSON 大小（字符串按转义后的 UTF-8 长度算） */
 function jsonSize(value: unknown): number {
-  return textByteLength(JSON.stringify(value) ?? 'null');
+  return typeof value === 'string' ? jsonStringByteLength(value) : textByteLength(stringifyJson(value) ?? 'null');
 }
 
 /** 每页多少条：1000 条约 8 MB（图像库），翻页事务数也还能接受 */
@@ -197,14 +199,14 @@ function databaseTask(
       };
       const writer = createJsonWriter(counted);
       let records = 0;
-      writer.raw(`{"name":${JSON.stringify(name)},"version":${reader.version},"stores":[`);
+      writer.raw(`{"name":${stringifyJson(name)},"version":${reader.version},"stores":[`);
       let firstStore = true;
       for (const store of reader.stores) {
         if (!firstStore) writer.raw(',');
         firstStore = false;
         writer.raw(
-          `{"name":${JSON.stringify(store.name)},"keyPath":${JSON.stringify(store.keyPath)},`
-          + `"autoIncrement":${store.autoIncrement},"indexes":${JSON.stringify(store.indexes)},"records":[`,
+          `{"name":${stringifyJson(store.name)},"keyPath":${stringifyJson(store.keyPath)},`
+          + `"autoIncrement":${store.autoIncrement},"indexes":${stringifyJson(store.indexes)},"records":[`,
         );
         let after: DbKey | undefined;
         let firstRecord = true;
@@ -409,7 +411,9 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
 
     // 索引与分区同源：标题、时间、名称、ID 都取自同一份 details，恢复页不必再解压 saves.json
     const blobBytes = new Map(blobs.list().map(item => [item.blob.file, item.blob.bytes]));
-    index.saves = rows.map<IndexSave>((record, at) => {
+    const encodedDetails = new Map(detailRows.map(record => [record.slot, record]));
+    index.saves = rows.map<IndexSave>(record => {
+      const encodedDetail = encodedDetails.get(record.slot);
       const detail = detailBySlot.get(record.slot);
       const meta = detail && typeof detail === 'object' ? (detail as Record<string, unknown>) : null;
       const title = meta?.title;
@@ -423,7 +427,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
         ...(saveId === undefined ? {} : { id: saveId }),
         ...(saveName === undefined ? {} : { name: saveName }),
         ...(record.delta ? { delta: true } : {}),
-        b: encodedBytes(rows[at].data, blobBytes) + (detail === undefined ? 0 : jsonSize(detail)),
+        b: encodedBytes(record.data, blobBytes) + (encodedDetail ? encodedBytes(encodedDetail.data, blobBytes) : 0),
       };
     });
     index.legacy = hasLegacy;

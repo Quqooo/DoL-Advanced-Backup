@@ -34,6 +34,8 @@ export const ITEM_KIND_BY_ID = Object.fromEntries(
 export interface ItemFlags {
   /** 本模组自身：模组包或它的数据 */
   self?: boolean;
+  /** 回退枚举未能确认所有同名存储副本的模组身份。 */
+  modIdentityUnknown?: boolean;
   /** 由当前构建注入，不在存储里 */
   injected?: boolean;
   /** 来自 modList.json 的远程模组 */
@@ -144,10 +146,12 @@ export function measureFallback(item: Item, old: Item): Item {
 }
 
 /**
- * 单组重试后的合并：新产出的地址要移除 `other` 中的同名条目。
- * `other` 按「本轮已认领」计算差集，只重跑一组时不会更新，同一地址会出现两条。
+ * 单组重试后的合并：other 没有重跑，移除新产出的地址和只认领、不单列的地址。
  */
-export function mergeRetried(items: readonly Item[], produced: readonly Item[]): Item[] {
-  const fresh = new Set(produced.map(item => item.addr));
+export function mergeRetried(
+  items: readonly Item[], produced: readonly Item[], claims: readonly string[] = [],
+): Item[] {
+  const fresh = new Set(claims);
+  for (const item of produced) fresh.add(item.addr);
   return [...items.filter(item => item.collector !== 'other' || !fresh.has(item.addr)), ...produced];
 }

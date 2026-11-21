@@ -1,11 +1,59 @@
 import { idbAddr, nameOfAddr, schemeOf } from '../core/address';
+import { modMatches, readBootMeta } from '../core/bootmeta';
 import { groupOfKnown } from '../core/group';
-import { matches, selfEntry } from '../core/mapping';
-import { kindOfAddr, type Item } from '../core/item';
-import { listAddrs } from '../store/address';
+import { selfEntry } from '../core/mapping';
+import { kindOfAddr, type Item, type ItemFlags } from '../core/item';
+import { listAddrs, type AddrInfo } from '../store/address';
 import { COARSE_MEASURE_BUDGET, measureDatabase } from '../store/idb/dump';
+import { openModReader } from '../store/mods';
 import { measuredDbItem } from './dbitem';
 import type { CollectContext, Collector, CollectResult } from './index';
+
+/** 镜像会删除同名的两层副本；用各层的当前值判断身份，不看存储名。 */
+async function fallbackModFlags(ctx: CollectContext, infos: readonly AddrInfo[]): Promise<Map<string, ItemFlags>> {
+  const mods = infos.flatMap(info => schemeOf(info.addr) === 'mod' ? [info.addr] : []);
+  const out = new Map<string, ItemFlags>();
+  if (mods.length === 0) return out;
+  for (const addr of mods) out.set(addr, { modIdentityUnknown: true });
+  try {
+    const names = await ctx.modNames();
+    const idb = new Set(names.idb);
+    const local = new Set(names.local);
+    const self = selfEntry()?.mod;
+    const reader = await openModReader({ idb: names.idb.length > 0 });
+    try {
+      for (const addr of mods) {
+        const name = nameOfAddr(addr);
+        if (name === null) continue;
+        let found = false;
+        let unknown = false;
+        let own = false;
+        for (const [layer, inLayer] of [['idb', idb], ['local', local]] as const) {
+          if (!inLayer.has(name)) continue;
+          found = true;
+          try {
+            const value = await reader.readLayer(layer, name);
+            const meta = value === undefined ? null : await readBootMeta(value);
+            if (self && modMatches(self, meta)) {
+              own = true;
+              break;
+            }
+            if (!meta?.name) unknown = true;
+          } catch {
+            unknown = true;
+          }
+        }
+        if (own) out.set(addr, { self: true });
+        else if (found && !unknown) out.delete(addr);
+      }
+    } finally {
+      reader.close();
+    }
+  } catch (error) {
+    console.warn('[AdvancedBackup] 回退模组身份读取失败', error);
+  }
+  return out;
+}
 
 /**
  * `other`：枚举结果中未被认领的地址。
@@ -17,8 +65,10 @@ export const otherCollector: Collector = {
   name: 'other',
   async collect(ctx: CollectContext): Promise<CollectResult> {
     const items: Item[] = [];
+    const infos = await listAddrs(ctx);
+    const modFlags = await fallbackModFlags(ctx, infos);
 
-    for (const info of await listAddrs(ctx)) {
+    for (const info of infos) {
       const scheme = schemeOf(info.addr);
       const kind = kindOfAddr(info.addr);
       if (!kind) continue;
@@ -30,11 +80,7 @@ export const otherCollector: Collector = {
         continue;
       }
 
-      // 模组采集器失败时，本模组自己的包也会落到这里；补上 self 标记，
-      // 「保留本模组」才不会在回退路径上失效
-      const self = scheme === 'mod' ? selfEntry() : null;
-      const storedName = self ? nameOfAddr(info.addr) : null;
-      const flags = self && storedName !== null && matches(self.mod, storedName) ? { self: true as const } : undefined;
+      const flags = modFlags.get(info.addr);
 
       items.push({
         addr: info.addr,

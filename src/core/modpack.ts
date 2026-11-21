@@ -415,7 +415,12 @@ export async function writeModPackTo(
   await out.write(meta);
   await writePadding(out, meta.length);
   for (const file of streams) {
+    const start = written;
     await file.write(out);
+    const actual = written - start;
+    if (actual !== file.length) {
+      throw new Error(`ModPack 条目 ${file.name} 长度不符：声明 ${file.length}，写入 ${actual} 字节`);
+    }
     await writePadding(out, file.length);
   }
   await out.write(fileTree);

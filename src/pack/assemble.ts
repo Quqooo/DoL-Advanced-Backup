@@ -203,6 +203,9 @@ export async function packTo(
       tail.push({ name: item.blob.file, bytes: item.bytes, deflate: true });
     }
 
+    // 普通块的所有权已转给 tail；逐条编码后就能释放源字节，不必等其余块。
+    blobs.release();
+
     // 按字节加权：整库那一条有 150 MB，按条目数算它只占 1/170，进度条会在它身上冻住三秒
     const totalBytes = [...head, ...tail].reduce((sum, item) => sum + item.bytes.length, 0) + (packed?.bytes ?? 0);
     const encodeRatio = (bytes: number): number =>
@@ -243,6 +246,8 @@ export async function packTo(
       // 打包块分块直接进压缩流：不拼整段，也不做「已压缩」嗅探（它恰恰最该压）
       emit('encode', encodeRatio(doneBytes), packed.file);
       const encoded = await encodeChunks(packed.parts, { compression: options.compression });
+      // STORE 下结果也有独立的分块列表；只清空源列表，不修改 sink 将要读取的字节。
+      blobs.releasePacked();
       entries.push({
         name: packed.file,
         data: encoded.parts,
@@ -253,9 +258,6 @@ export async function packTo(
       doneBytes += encoded.size;
       emit('encode', encodeRatio(doneBytes));
     }
-    // 数据块与打包块的源字节都已进包：装配段只需要压缩结果
-    blobs.releasePacked();
-    blobs.release();
 
     emit('assemble', ENCODE_END);
     // 与 manifest.createdAt 同源：导出侧提前算过同一个名字，两边不能各取一次当前时间；
@@ -279,7 +281,11 @@ export async function packTo(
     // 那样写出的包连自己都打不开，必须在导出阶段报错而不是留下一个坏包。
     const writeZip = async (target: ByteSink): Promise<number> => {
       const writer = new ZipWriter(target, at, report);
-      for (const entry of entries) await writer.add(entry);
+      for (const entry of entries) {
+        await writer.add(entry);
+        // 中央目录只用 writer 留下的元数据；文件 sink 不必在写下一条时仍持有前一条。
+        entry.data = EMPTY;
+      }
       for (const plan of planned.plans) {
         throwIfAborted(hooks.signal);
         const found = reader && await readMod(reader, plan.stored, injectedOf);

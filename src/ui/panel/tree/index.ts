@@ -87,12 +87,10 @@ interface GroupEl {
   /** 当前模型里的节点：条目追加后合计与勾选都按它算 */
   node: GroupNode;
   children: TreeEl[];
-  /** 只装当前页的分页组 */
-  paged: boolean;
-  /** 当前页：翻页要重装这一组的内容 */
+  /** 分页组的导航在子条目之后，不参与条目对账 */
+  pager: HTMLElement | null;
   page: number;
-  /** 上次挂载时的子条目总数：分页组的页数变了要重装 */
-  childCount: number;
+  pageCount: number;
 }
 
 type TreeEl = LeafEl | GroupEl;
@@ -398,24 +396,11 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
   }
 
   /** 当前页：数据减少时回到最后一页，避免停在空页上 */
-  function pageOf(node: GroupNode): number {
-    const pagesCount = pageCount(node);
+  function pageOf(node: GroupNode, pagesCount: number): number {
     const page = pages.get(node.id) ?? 0;
     const clamped = Math.min(page, pagesCount - 1);
     if (clamped !== page) pages.set(node.id, clamped);
     return clamped;
-  }
-
-  /**
-   * 翻页 / 改页码：只重装这一组的内容。
-   *
-   * 页码没变时（越界输到当前页）对账会原样保留，标签变不回来——所以标成「待重装」。
-   */
-  function renderPage(id: string): void {
-    const record = groupEls.get(id);
-    if (record) record.page = -1;
-    render();
-    sync();
   }
 
   function renderGroup(node: GroupNode): GroupEl {
@@ -449,53 +434,44 @@ export function createCheckTree(options: CheckTreeOptions = {}): CheckTree {
       meta: parts.meta,
       node,
       children: [],
-      paged: false,
+      pager: null,
       page: 0,
-      childCount: 0,
+      pageCount: 0,
     };
     groupEls.set(node.id, record);
     mountChildren(record);
     return record;
   }
 
-  /** 分组内容：分页组只装卸当前页，其余按子节点对账 */
-  function mountChildren(record: GroupEl): void {
+  /** 按身份与内容对账；分页时每次只检查当前页（最多 10 行） */
+  function mountChildren(record: GroupEl, resetPager = false): void {
     const node = record.node;
     const paged = PAGED_GROUPS.has(node.id) && node.children.length > SAVE_PAGE_SIZE;
-    const page = paged ? pageOf(node) : 0;
-
-    if (!paged && !record.paged) {
+    if (!paged) {
+      record.pager?.remove();
+      record.pager = null;
       record.children = reconcile(record.content, node.children, record.children);
       return;
     }
-    if (paged && record.paged && record.page === page && record.childCount === node.children.length) return;
 
-    // 分页组：页内条目、页码与页数都随数据变，整段重装最省事
-    for (const child of record.children) drop(child);
-    record.children = [];
-    record.content.replaceChildren();
-    record.paged = paged;
-    record.page = page;
-    record.childCount = node.children.length;
-    if (!paged) {
-      record.children = reconcile(record.content, node.children, []);
-      return;
-    }
+    const pagesCount = Math.ceil(node.children.length / SAVE_PAGE_SIZE);
+    const page = pageOf(node, pagesCount);
     const slice = node.children.slice(page * SAVE_PAGE_SIZE, (page + 1) * SAVE_PAGE_SIZE);
-    record.children = slice.map(child => (child.kind === 'leaf' ? renderLeaf(child.item) : renderGroup(child)));
-    record.content.append(
-      ...record.children.map(child => child.el),
-      pagerNav(page, pageCount(node), {
-        onGo: next => {
-          pages.set(node.id, next);
-          renderPage(node.id);
-        },
-      }),
-    );
-  }
+    record.children = reconcile(record.content, slice, record.children);
+    if (record.pager && record.page === page && record.pageCount === pagesCount && !resetPager) return;
 
-  function pageCount(node: GroupNode): number {
-    return Math.max(1, Math.ceil(node.children.length / SAVE_PAGE_SIZE));
+    record.pager?.remove();
+    record.page = page;
+    record.pageCount = pagesCount;
+    record.pager = pagerNav(page, pagesCount, {
+      onGo: next => {
+        pages.set(node.id, next);
+        // 页码不变时也换回标签，例如取消输入或输入越界。无需重建模型。
+        mountChildren(record, true);
+        sync();
+      },
+    });
+    record.content.appendChild(record.pager);
   }
 
   function updateGroup(record: GroupEl, node: GroupNode): void {

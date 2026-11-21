@@ -30,14 +30,20 @@ interface Step {
 }
 
 /** 写入前逐库预检；只累计选中载荷引用的块，不保留全分区对象图。 */
-async function validatePayloads(plan: RestorePlan, selected: ReadonlySet<string>, signal?: AbortSignal): Promise<Map<string, Uint8Array>> {
+async function validatePayloads(
+  plan: RestorePlan,
+  selected: ReadonlySet<string>,
+  signal?: AbortSignal,
+  tick?: (fraction: number, label?: string) => void,
+): Promise<Map<string, Uint8Array>> {
+  throwIfAborted(signal);
   verifySectionIndex(plan.bundle, plan.sections);
   const blobs = new Map<string, Uint8Array>();
-  const loadRefs = async (value: unknown): Promise<void> => {
-    const refs = new Set<string>();
-    collectBlobRefs(value, refs);
-    for (const file of blobs.keys()) refs.delete(file);
+  const loadRefs = async (refs: Set<string>): Promise<void> => {
+    for (const file of refs) if (blobs.has(file)) refs.delete(file);
+    if (refs.size === 0) return;
     for (const [file, bytes] of await loadBlobs(plan.bundle, refs)) blobs.set(file, bytes);
+    throwIfAborted(signal);
   };
   const resolve = (file: string): Uint8Array | null => blobs.get(file) ?? null;
   // v2 走结构校验，不建对象图；v1 仍是宽松解码，旧包里的写法不能被严格规则拒掉
@@ -46,34 +52,57 @@ async function validatePayloads(plan: RestorePlan, selected: ReadonlySet<string>
     if (format === 2) validateEncoded(value, resolve, path);
     else createDecoder(1, resolve).decode(value);
   };
-  let sectionOf: Awaited<ReturnType<typeof openDbSections>> | undefined;
   const byAddr = new Map(plan.items.map(item => [item.addr, item]));
+  const payloads: Item[] = [];
   for (const addr of selected) {
-    // 整库预检是这条链上最长的一段，取消要能在这里生效
-    throwIfAborted(signal);
     const item = byAddr.get(addr);
     if (!item) throw messageError('bundleAddressMismatch');
+    if (item.kind === 'save' || item.kind === 'idb') payloads.push(item);
+  }
+
+  let sectionOf: Awaited<ReturnType<typeof openDbSections>> | undefined;
+  let lastYield = performance.now();
+  let done = 0;
+  for (const item of payloads) {
+    const addr = item.addr;
+    const label = item.kind === 'idb' ? nameOfAddr(addr) ?? '' : 'saves';
+    tick?.(done / payloads.length, label);
+    throwIfAborted(signal);
+    const refs = new Set<string>();
     if (item.kind === 'save') {
       const slot = slotOfAddr(addr);
       const record = plan.sections.saves?.saves.find(record => record.slot === slot);
       if (!record) throw messageError('bundleAddressMismatch');
-      await loadRefs(record.data);
-      check(record.data, `save/${slot}`);
       const detail = plan.sections.saves?.details.find(record => record.slot === slot);
-      if (detail) {
-        await loadRefs(detail.data);
-        check(detail.data, `save/${slot}/details`);
-      }
-    } else if (item.kind === 'idb') {
+      const path = `save/${slot}`;
+      collectBlobRefs(record.data, refs, path);
+      if (detail) collectBlobRefs(detail.data, refs, `${path}/details`);
+      await loadRefs(refs);
+      check(record.data, path);
+      if (detail) check(detail.data, `${path}/details`);
+    } else {
       sectionOf ??= await openDbSections(plan);
-      const db = await sectionOf(nameOfAddr(addr) ?? '');
-      await loadRefs(db);
+      throwIfAborted(signal);
+      const db = await sectionOf(label);
+      throwIfAborted(signal);
+      collectBlobRefs(db, refs, label);
+      await loadRefs(refs);
       // 每条独立校验，不构造整库解码对象图。
-      for (const store of db.stores) for (const record of store.records) {
-        check(record.key, `${nameOfAddr(addr) ?? ''}/${store.name}/key`);
-        check(record.value, `${nameOfAddr(addr) ?? ''}/${store.name}`);
+      for (const store of db.stores) {
+        const path = `${label}/${store.name}`;
+        for (const record of store.records) {
+          check(record.key, `${path}/key`);
+          check(record.value, path);
+        }
       }
     }
+    done++;
+    // 缓存命中时 await 可能只排微任务。长时间逐库预检也要让界面刷新、处理取消。
+    if ((signal || tick) && performance.now() - lastYield >= 16) {
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
+      lastYield = performance.now();
+    }
+    throwIfAborted(signal);
   }
   return blobs;
 }
@@ -97,6 +126,7 @@ function stepWeight(
 }
 
 export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
+  throwIfAborted(input.signal);
   // 计划阶段只建树，分区是写入前才读的；直接调这里的路径（不经 restorePackage）也要补齐
   if (Object.keys(input.plan.sections).length === 0) {
     input.plan.sections = await input.plan.loadSections();
@@ -111,14 +141,16 @@ export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
     skippedMirror: [],
     needsReload: false,
   };
-  /** 载入数据块占前 10%：137 个 STORE 条目只是 memcpy，真正的时间在写入 */
+  /** 预检（包含读取引用块）占前 10%，其余分配给写入。 */
   const LOAD_END = 0.1;
   const emit = (ratio: number, label?: string): void => {
     input.onProgress?.({ ratio, ...(label ? { label } : {}) });
   };
   emit(0);
-  const blobs = await validatePayloads(input.plan, input.selected, input.signal);
+  const blobs = await validatePayloads(input.plan, input.selected, input.signal,
+    input.onProgress ? (ratio, label) => emit(ratio * LOAD_END, label) : undefined);
   emit(LOAD_END);
+  throwIfAborted(input.signal);
 
   const { scope, candidates } = input.mirror ?? prepareMirror(input.plan, input.selected, input.keepSelf !== false);
   // 写模组列表时排除稍后会被卸载的包，以避免留下无效条目。
@@ -142,6 +174,7 @@ export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
     writtenDbs: new Set(),
   };
 
+  throwIfAborted(input.signal);
   const steps: Step[] = [
     { category: 'saves', label: 'saves', kinds: ['save'], run: () => applySaves(state) },
     { category: 'saves', label: 'legacy', kinds: ['save-legacy'], run: () => applyLegacy(state) },

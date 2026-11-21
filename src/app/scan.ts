@@ -132,11 +132,11 @@ export async function retryCollector(name: string): Promise<ScanResult | null> {
       // `other` 组不产出认领，重跑只需重新计算一次差集
       next.items.push(...(await collectLeftover(ctx)));
     } else {
-      // 先收进临时结果：这组新认领的地址可能已经在 `other` 里有一份同地址条目。
-      // 认领只在扫描开头计算一次，重试后不会自动移除 `other` 中的同名条目，因此在这里移除。
+      // 重试只跑一组：同时移除 other 中被新条目替代或被认领但不单列的地址。
+      const result = await collector.collect(ctx);
       const produced: Item[] = [];
-      absorb(await collector.collect(ctx), { items: produced, claims: next.claims });
-      next.items = mergeRetried(next.items, produced);
+      absorb(result, { items: produced, claims: next.claims });
+      next.items = mergeRetried(next.items, produced, result.claims);
     }
     delete next.errors[name];
   } catch (error) {

@@ -438,26 +438,45 @@ function encodeNode(value: unknown, blobs: BlobTable, ctx: Context, path: string
   }
 }
 
-/** 收集 JSON 里出现的 blob 文件路径，导出收尾据此做引用闭合 */
-export function collectBlobRefs(value: unknown, into: Set<string>): void {
-  if (Array.isArray(value)) {
-    for (const item of value) collectBlobRefs(item, into);
-    return;
-  }
-  if (typeof value !== 'object' || value === null) return;
+// 稀疏数组的每层值最多隔四层 JSON；为分区外壳和叶标记再留余量。
+// 这是显式栈的上限，不取代逐个值的逻辑深度/节点校验；整库可含许多独立值。
+const MAX_REF_DEPTH = MAX_DEPTH * 4 + 16;
+type RefFrame = { values: unknown[]; index: number }
+  | { values: Record<string, unknown>; keys: string[]; literal: boolean; index: number };
 
-  const record = value as Record<string, unknown>;
-  // 转义层里的键是字面量：`$ab:blob` 这类键只是用户数据，不能当引用收进去。
-  // 值仍是编码后的节点，逐个递归；它们的标记照常识别。
-  if (isRecord(record[OBJ])) {
-    for (const item of Object.values(record[OBJ] as Record<string, unknown>)) collectBlobRefs(item, into);
-    return;
-  }
-  const file = record[BLOB];
-  if (typeof file === 'string') into.add(file);
-  for (const [key, item] of Object.entries(record)) {
-    if (key === BLOB) continue;
-    collectBlobRefs(item, into);
+/** 收集 JSON 里出现的 blob 文件路径，堆栈大小只随深度而非容器宽度增长。 */
+export function collectBlobRefs(value: unknown, into: Set<string>, path = ''): void {
+  const stack: RefFrame[] = [];
+  const enter = (node: unknown): void => {
+    if (typeof node !== 'object' || node === null) return;
+    if (stack.length > MAX_REF_DEPTH) throw messageError('valueDepthExceeded', path);
+    if (Array.isArray(node)) {
+      stack.push({ values: node, index: 0 });
+      return;
+    }
+    const record = node as Record<string, unknown>;
+    const escaped = record[OBJ];
+    // 转义层的键是字面量，值仍可含真正的标记。
+    if (isRecord(escaped)) {
+      stack.push({ values: escaped, keys: Object.keys(escaped), literal: true, index: 0 });
+    } else {
+      const file = record[BLOB];
+      if (typeof file === 'string') into.add(file);
+      stack.push({ values: record, keys: Object.keys(record), literal: false, index: 0 });
+    }
+  };
+
+  enter(value);
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if ('keys' in frame) {
+      if (frame.index === frame.keys.length) stack.pop();
+      else {
+        const key = frame.keys[frame.index++];
+        if (frame.literal || key !== BLOB) enter(frame.values[key]);
+      }
+    } else if (frame.index === frame.values.length) stack.pop();
+    else enter(frame.values[frame.index++]);
   }
 }
 

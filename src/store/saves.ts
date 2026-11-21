@@ -110,7 +110,12 @@ export function detailTime(record: { data?: unknown } | undefined): number {
  * 槽位与 details 成对写。
  * `details.idx` 是存档时的段落计数（`State.qc`），读档会写回 `state.idx`，必须原样保留，不能按日期重算。
  */
-export async function writeSaves(saves: readonly SaveRecord[], details: readonly DetailRecord[], missing = false): Promise<Set<number>> {
+export async function writeSaves(
+  saves: readonly SaveRecord[],
+  details: readonly DetailRecord[],
+  missing = false,
+  options: { removeMissingDetails?: boolean } = {},
+): Promise<Set<number>> {
   const db = await ensureDb(gameDb, 1, [
     { name: SAVE_STORE, keyPath: 'slot' },
     { name: DETAIL_STORE, keyPath: 'slot' },
@@ -124,6 +129,7 @@ export async function writeSaves(saves: readonly SaveRecord[], details: readonly
           saveStore.put(record);
           const detail = details.find(item => item.slot === record.slot);
           if (detail) detailStore.put(detail);
+          else if (!missing && options.removeMissingDetails) detailStore.delete(record.slot);
           written.add(record.slot);
         } catch (error) {
           abortQuietly(tx);

@@ -196,16 +196,6 @@ export function badgesOf(item: Item): string[] {
   return out.filter(Boolean);
 }
 
-/** 组内顺序：给了排序键就按它（槽号、加载顺序），否则按名称 */
-function sortItems(list: readonly Item[]): Item[] {
-  return [...list].sort((left, right) => {
-    const a = left.order ?? Number.MAX_SAFE_INTEGER;
-    const b = right.order ?? Number.MAX_SAFE_INTEGER;
-    if (a !== b) return a - b;
-    return itemLabel(left).localeCompare(itemLabel(right));
-  });
-}
-
 function rankOf(node: Node): number {
   if (node.kind === 'leaf') {
     // 条目自带排序键（槽号、加载顺序、列表次序），没有就垫底
@@ -214,45 +204,56 @@ function rankOf(node: Node): number {
   return RANK[node.id] ?? Number.MAX_SAFE_INTEGER;
 }
 
-function nodeTitle(node: Node): string {
-  return node.kind === 'leaf' ? itemLabel(node.item) : node.title;
-}
-
-function compareNodes(left: Node, right: Node): number {
-  const rank = rankOf(left) - rankOf(right);
-  return rank === 0 ? nodeTitle(left).localeCompare(nodeTitle(right)) : rank;
-}
-
-function categoryNode(items: readonly Item[], category: Category, level: number): GroupNode | null {
-  const list = items.filter(item => categoryOfGroup(item.group) === category);
-  if (list.length === 0) return null;
-
-  const root: Draft = { id: category, items: [], children: new Map() };
-  for (const item of list) {
-    const segments = segmentsOf(item.group);
-    let node = root;
-    for (const segment of segments.slice(1)) {
-      const id = `${node.id}/${segment}`;
-      let child = node.children.get(id);
-      if (!child) {
-        child = { id, items: [], children: new Map() };
-        node.children.set(id, child);
-      }
-      node = child;
+/** 条目和子分组一起排；只在排序键相同时算一次条目名称 */
+function sortEntries(entries: Node[]): void {
+  if (entries.length < 2) return;
+  const labels = new Map<LeafNode, string>();
+  const title = (node: Node): string => {
+    if (node.kind === 'group') return node.title;
+    let label = labels.get(node);
+    if (label === undefined) {
+      label = itemLabel(node.item);
+      labels.set(node, label);
     }
-    node.items.push(item);
-  }
+    return label;
+  };
+  entries.sort((left, right) => {
+    const rank = rankOf(left) - rankOf(right);
+    return rank === 0 ? title(left).localeCompare(title(right)) : rank;
+  });
+}
 
-  return toGroup(root, category, level);
+function draftOf(group: string, categories: Map<Category, Draft>): Draft {
+  const category = categoryOfGroup(group);
+  let root = categories.get(category);
+  if (!root) {
+    root = { id: category, items: [], children: new Map() };
+    categories.set(category, root);
+  }
+  const segments = segmentsOf(group);
+  let node = root;
+  for (let i = 1; i < segments.length; i++) {
+    const id = `${node.id}/${segments[i]}`;
+    let child = node.children.get(id);
+    if (!child) {
+      child = { id, items: [], children: new Map() };
+      node.children.set(id, child);
+    }
+    node = child;
+  }
+  return node;
 }
 
 /** 中间形状 → 渲染用的节点；父分组的合计含全部后代，勾选才覆盖整棵子树 */
 function toGroup(draft: Draft, category: Category, level: number): GroupNode {
-  const direct: Node[] = sortItems(draft.items).map(item => ({ kind: 'leaf', item }));
-  const children = [...draft.children.values()]
-    .map(child => toGroup(child, category, level + 1))
-    .sort(compareNodes);
-  const entries = [...direct, ...children].sort(compareNodes);
+  const entries: Node[] = draft.items.map(item => ({ kind: 'leaf', item }));
+  for (const child of draft.children.values()) entries.push(toGroup(child, category, level + 1));
+  sortEntries(entries);
+
+  const all = [...draft.items];
+  for (const entry of entries) {
+    if (entry.kind === 'group') for (const item of entry.all) all.push(item);
+  }
 
   // 模组数据的分组本身就是那一组键与库，对上的模组名写在分组行上。
   // 包内条目没有采集阶段写下的 groupSub，用分组路径里的模组名补上
@@ -268,12 +269,24 @@ function toGroup(draft: Draft, category: Category, level: number): GroupNode {
     category,
     level,
     children: entries,
-    all: [...draft.items, ...children.flatMap(child => child.all)],
+    all,
   };
 }
 
 /** 分类 → 分组 → 条目；存档 / 进度 / 设置先收进「游戏数据」 */
 export function buildTree(items: readonly Item[]): Node[] {
+  // 一次分桶，同路径的条目直接进入已找到的分组。
+  const categories = new Map<Category, Draft>();
+  const drafts = new Map<string, Draft>();
+  for (const item of items) {
+    let draft = drafts.get(item.group);
+    if (!draft) {
+      draft = draftOf(item.group, categories);
+      drafts.set(item.group, draft);
+    }
+    draft.items.push(item);
+  }
+
   const roots: Node[] = [];
   const game: GroupNode = {
     kind: 'group',
@@ -285,9 +298,10 @@ export function buildTree(items: readonly Item[]): Node[] {
   };
 
   for (const category of CATEGORY_ORDER) {
+    const draft = categories.get(category);
+    if (!draft) continue;
     const inGame = GAME_CATEGORIES.has(category);
-    const node = categoryNode(items, category, inGame ? 1 : 0);
-    if (!node) continue;
+    const node = toGroup(draft, category, inGame ? 1 : 0);
     if (inGame) {
       game.children.push(node);
       game.all.push(...node.all);
