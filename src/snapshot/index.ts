@@ -27,12 +27,12 @@ export type { SnapshotMeta } from '../store/snapshots';
  * 注入的模组只活在页面里（`modDataValueZipList`），三个存储层都没有它们：
  * 装进快照后恢复时会被当成旁加载模组写进 IDB，与构建带进来的那份用同一个 `boot.json` 名。
  */
+export function isSnapshotItem(item: Item): boolean {
+  return !item.flags?.injected && !(item.flags?.self && item.kind !== 'mod');
+}
+
 export function snapshotAddrs(items: readonly Item[]): Set<string> {
-  return new Set(
-    items
-      .filter(item => !item.flags?.injected && !(item.flags?.self && item.kind !== 'mod'))
-      .map(item => item.addr),
-  );
+  return new Set(items.filter(isSnapshotItem).map(item => item.addr));
 }
 
 /** 写入前至少还要留出这么多，避免占满配额后挤掉游戏存档 */

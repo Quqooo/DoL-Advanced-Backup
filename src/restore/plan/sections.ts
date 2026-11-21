@@ -1,5 +1,5 @@
 import { parseJson } from '../../core/json';
-import { dbFilesOf } from '../../core/manifest';
+import { hasOwn, isRecord } from '../../core/guards';
 import { messageError } from '../../core/error';
 import {
   extract,
@@ -7,10 +7,9 @@ import {
   jsonRange,
   scanArray,
   splitArray,
-  splitElements,
   type JsonRange,
 } from '../../core/jsonscan';
-import type { Bundle } from '../bundle';
+import { BundleError, sectionDirectory, type Bundle } from '../bundle';
 import type {
   DbSection,
   DbStoreSection,
@@ -23,6 +22,65 @@ import type {
 
 const decoder = new TextDecoder();
 
+function invalidSection(file: string): never {
+  throw new BundleError('verify', 'bundleSectionShape', file);
+}
+
+function isKeysSection(value: unknown): value is KeysSection {
+  return isRecord(value) && Array.isArray(value.items) && value.items.every(
+    item => isRecord(item) && typeof item.a === 'string' && typeof item.v === 'string',
+  );
+}
+
+function isSaveRecord(value: unknown): boolean {
+  return isRecord(value) && typeof value.slot === 'number' && Number.isInteger(value.slot) && value.slot >= 0
+    && hasOwn(value, 'data');
+}
+
+function isNullableString(value: unknown): boolean {
+  return value === null || typeof value === 'string';
+}
+
+function isSavesSection(value: unknown): value is SavesSection {
+  if (!isRecord(value) || !Array.isArray(value.saves) || !value.saves.every(isSaveRecord)
+    || !Array.isArray(value.details) || !value.details.every(isSaveRecord)
+    || (value.engine !== undefined && typeof value.engine !== 'string')) return false;
+  const legacy = value.legacy;
+  return legacy === undefined || legacy === null
+    || (isRecord(legacy) && isNullableString(legacy.saves) && isNullableString(legacy.details));
+}
+
+function isModList(value: unknown): boolean {
+  return value === null || (Array.isArray(value) && value.every(name => typeof name === 'string'));
+}
+
+function isModsSection(value: unknown): value is ModsSection {
+  return isRecord(value) && isModList(value.order) && isModList(value.hidden);
+}
+
+async function readValidated<T>(bundle: Bundle, file: string, accepts: (value: unknown) => value is T): Promise<T> {
+  const value = await bundle.readJson<unknown>(file);
+  if (!accepts(value)) invalidSection(file);
+  return value;
+}
+
+const modLists = new WeakMap<Bundle, Promise<ModsSection>>();
+
+/** 预览与执行复用同一份已校验的列表；未登记的同名文件不读。 */
+export function readModsSection(bundle: Bundle): Promise<ModsSection | undefined> {
+  const section = sectionDirectory(bundle.manifest).singles.get('mods');
+  if (!section) return Promise.resolve(undefined);
+  let pending = modLists.get(bundle);
+  if (!pending) {
+    pending = readValidated(bundle, section.file, isModsSection).catch(error => {
+      modLists.delete(bundle);
+      throw error;
+    });
+    modLists.set(bundle, pending);
+  }
+  return pending;
+}
+
 /** 先移除一大段再解析：剩下的只有几百字节的元信息 */
 function parseSlice<T>(bytes: Uint8Array, range: JsonRange, strip: JsonRange): T {
   const part = extract(bytes, range, strip);
@@ -34,29 +92,35 @@ function parseSlice<T>(bytes: Uint8Array, range: JsonRange, strip: JsonRange): T
  *
  * 写入时 `applyDbs` 会从 `idb.json` 的字节里逐库切片解析，解析后即丢弃。这里再建一份
  * 完整对象图，会使整库在内存中保留两份。计划阶段不读取它，只有 `loadSections` 使用。
- *
- * 结构不一致（包被修改、不是本模组写入）时退回整段解析：多占内存优于给出错误的行。
  */
-async function readIdbSkeleton(bundle: Bundle): Promise<IdbSection | null> {
-  if (!bundle.has('idb.json')) return null;
-  const bytes = await bundle.read('idb.json');
-  const fallback = (): Promise<IdbSection> => bundle.readJson<IdbSection>('idb.json');
-  const dbsStart = findValueStart(bytes, jsonRange(bytes), 'dbs');
-  if (dbsStart === null) return fallback();
+async function readIdbSkeleton(bundle: Bundle, file: string): Promise<IdbSection> {
+  const bytes = await bundle.read(file);
+  const range = jsonRange(bytes);
+  const dbsStart = findValueStart(bytes, range, 'dbs');
+  // 扫描器假定起点是方括号，不能把 null 或对象当成数组。
+  const arrayAt = (start: number | null): number => {
+    if (start === null || bytes[start] !== 0x5b) invalidSection(file);
+    return start;
+  };
 
   const dbs: DbSection[] = [];
-  for (const dbRange of splitElements(bytes, { start: dbsStart, end: bytes.length })) {
-    const storesStart = findValueStart(bytes, dbRange, 'stores');
-    if (storesStart === null) return fallback();
+  const list = splitArray(bytes, arrayAt(dbsStart), range.end);
+  if (bytes[list.end - 1] !== 0x5d || bytes[range.end - 1] !== 0x7d) invalidSection(file);
+  for (const dbRange of list.elements) {
+    const storesStart = arrayAt(findValueStart(bytes, dbRange, 'stores'));
     const stores = splitArray(bytes, storesStart, dbRange.end);
+    if (bytes[stores.end - 1] !== 0x5d) invalidSection(file);
     const meta = parseSlice<DbSection>(bytes, dbRange, { start: storesStart, end: stores.end });
+    if (typeof meta.name !== 'string' || !Number.isInteger(meta.version) || meta.version < 1) invalidSection(file);
     const out: DbStoreSection[] = [];
     for (const storeRange of stores.elements) {
-      const recordsStart = findValueStart(bytes, storeRange, 'records');
-      if (recordsStart === null) return fallback();
+      const recordsStart = arrayAt(findValueStart(bytes, storeRange, 'records'));
       const records = scanArray(bytes, recordsStart, storeRange.end);
+      if (bytes[records.end - 1] !== 0x5d) invalidSection(file);
+      const store = parseSlice<DbStoreSection>(bytes, storeRange, { start: recordsStart, end: records.end });
+      if (typeof store.name !== 'string') invalidSection(file);
       out.push({
-        ...parseSlice<DbStoreSection>(bytes, storeRange, { start: recordsStart, end: records.end }),
+        ...store,
         records: [],
         count: records.count,
       });
@@ -83,28 +147,27 @@ export async function readSections(
   onProgress?: (ratio: number) => void,
 ): Promise<PackageSections> {
   const sections: PackageSections = {};
-  const weights: [SectionKey, string, number][] = [
-    ['keys', 'keys.json', 5],
-    ['saves', 'saves.json', 15],
-    ...(bundle.has('idb.json') ? [['idb', 'idb.json', 70] as [SectionKey, string, number]] : []),
-    ['mods', 'mods.json', 10],
-  ];
-  const present = weights.filter(([, file]) => bundle.has(file));
+  const { singles } = sectionDirectory(bundle.manifest);
+  const weights: [SectionKey, number][] = [['keys', 5], ['saves', 15], ['idb', 70], ['mods', 10]];
+  const present = weights.flatMap(([key, weight]) => {
+    const section = singles.get(key);
+    return section ? [{ key, file: section.file, weight }] : [];
+  });
   // v3 只恢复整库时这里一个文件都不读：直接报完成，不把进度条留在起点
   if (present.length === 0) onProgress?.(1);
-  const total = present.reduce((sum, [, , weight]) => sum + weight, 0);
+  const total = present.reduce((sum, { weight }) => sum + weight, 0);
   let done = 0;
 
-  for (const [key, file, weight] of present) {
-    if (key === 'keys') sections.keys = await bundle.readJson<KeysSection>(file);
-    else if (key === 'saves') sections.saves = await bundle.readJson<SavesSection>(file);
-    else if (key === 'idb') {
-      const idb = await readIdbSkeleton(bundle);
-      if (idb) sections.idb = idb;
+  for (const { key, file, weight } of present) {
+    if (key === 'keys') sections.keys = await readValidated(bundle, file, isKeysSection);
+    else if (key === 'saves') sections.saves = await readValidated(bundle, file, isSavesSection);
+    else if (key === 'idb') sections.idb = await readIdbSkeleton(bundle, file);
+    else {
+      const mods = await readModsSection(bundle);
+      if (mods) sections.mods = mods;
     }
-    else sections.mods = await bundle.readJson<ModsSection>(file);
     done += weight;
-    onProgress?.(total > 0 ? done / total : 1);
+    onProgress?.(done / total);
   }
   verifySectionIndex(bundle, sections);
   return sections;
@@ -121,7 +184,9 @@ export function verifySectionIndex(bundle: Bundle, sections: PackageSections): v
   same((sections.keys?.items ?? []).map(item => item.a), index.keys.map(item => item.a));
   same((sections.saves?.saves ?? []).map(item => item.slot), index.saves.map(item => item.slot));
   // v3 的库名在分区元数据上（没有整库骨架可读），v1/v2 从骨架取
-  const dbNames = sections.idb ? sections.idb.dbs.map(item => item.name) : [...dbFilesOf(bundle.manifest).keys()];
+  const dbNames = bundle.manifest.format >= 3
+    ? [...sectionDirectory(bundle.manifest).databases.keys()]
+    : (sections.idb?.dbs ?? []).map(item => item.name);
   same(dbNames, index.dbs.map(item => item.name));
   const details = (sections.saves?.details ?? []).map(item => item.slot);
   if (new Set(details).size !== details.length || details.some(slot => !index.saves.some(item => item.slot === slot))

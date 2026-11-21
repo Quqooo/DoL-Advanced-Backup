@@ -613,6 +613,7 @@ const ZH: Strings = {
     bundleSaveIndex: (entries, count) => `存档索引为 ${entries} 条，多于 saves.json 的 ${count} 项`,
     bundleDbIndex: (entries, count) => `库索引为 ${entries} 条，与分区的 ${count} 个库不一致`,
     bundleEntryJson: path => `${path} 不是合法 JSON`,
+    bundleSectionShape: path => `${path} 的分区格式不正确`,
     restoreEmpty: '包内没有可恢复的条目',
     // 写入
     dbMissingStores: stores => `缺少仓库 ${stores}`,
@@ -656,7 +657,6 @@ const ZH: Strings = {
     labelModEnabled: '启用列表',
     labelSaveDb: '存档库',
     // 快照
-    snapshotWriteFailed: '写入快照失败',
     snapshotWriteAborted: '写入快照被中止',
     snapshotMetaFailed: '更新快照索引失败',
     snapshotDeleteFailed: '删除快照失败',
@@ -1011,6 +1011,7 @@ const EN: Strings = {
     bundleSaveIndex: (entries, count) => `The save index has ${entries} entries, more than the ${count} in saves.json`,
     bundleDbIndex: (entries, count) => `The database index has ${entries} entries but the sections list ${count} databases`,
     bundleEntryJson: path => `${path} is not valid JSON`,
+    bundleSectionShape: path => `The section format for ${path} is invalid`,
     restoreEmpty: 'The pack has nothing to restore',
     // 写入
     dbMissingStores: stores => `Missing object stores: ${stores}`,
@@ -1054,7 +1055,6 @@ const EN: Strings = {
     labelModEnabled: 'Enabled list',
     labelSaveDb: 'Save database',
     // 快照
-    snapshotWriteFailed: 'Could not write the snapshot',
     snapshotWriteAborted: 'Writing the snapshot was aborted',
     snapshotMetaFailed: 'Could not update the snapshot index',
     snapshotDeleteFailed: 'Could not delete the snapshot',

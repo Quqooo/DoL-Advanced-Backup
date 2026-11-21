@@ -18,9 +18,9 @@ import { sanitizeName } from '../core/naming';
 import { dateOf, saveIdOf, saveNameOf } from '../core/savemeta';
 import { databases, type DbKey } from '../store/idb';
 import { openDbReader, type DbReader } from '../store/idb/dump';
-import { readLocal, readSession } from '../store/local';
+import { listStorageKeys, readKey } from '../store/local';
 import { readIdbModLists } from '../store/mods';
-import { readDetails, readLegacy, readSaves } from '../store/saves';
+import { readLegacy, readSaveSlots } from '../store/saves';
 import type { BlobTable } from './blob';
 import { encodeValue, collectBlobRefs, compactPackedRefs } from './encode';
 import { assertSupported } from './graph';
@@ -301,19 +301,20 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
   const modNames = namesOfScheme(selected, 'mod');
   // 列表在不在存储里决定要不要写 mods.json，也决定这一块占不占进度份额；
   // 只在勾了这两份列表时才开库，只导几个键的导出不该为它多开一次连接
-  const needsLists = selected.has(MOD_ORDER_ADDR) || selected.has(MOD_HIDDEN_ADDR);
-  const lists = needsLists
-    ? await readIdbModLists()
-    : { enabled: [] as string[], hidden: [] as string[], orderPresent: false, hiddenPresent: false, orderValid: false, hiddenValid: false };
+  const wantOrder = selected.has(MOD_ORDER_ADDR);
+  const wantHidden = selected.has(MOD_HIDDEN_ADDR);
+  const lists = wantOrder || wantHidden ? await readIdbModLists({ order: wantOrder, hidden: wantHidden }) : null;
   // 键在但读不出来时不写这一份：把损坏的列表写成空数组，恢复会把顺序清掉
-  const wantOrder = selected.has(MOD_ORDER_ADDR) && lists.orderPresent && lists.orderValid;
-  const wantHidden = selected.has(MOD_HIDDEN_ADDR) && lists.hiddenPresent && lists.hiddenValid;
-  if (selected.has(MOD_ORDER_ADDR) && !wantOrder) throw messageError('packSelectionMissing', MOD_ORDER_ADDR);
-  if (selected.has(MOD_HIDDEN_ADDR) && !wantHidden) throw messageError('packSelectionMissing', MOD_HIDDEN_ADDR);
+  if (wantOrder && !(lists?.orderPresent && lists.orderValid)) throw messageError('packSelectionMissing', MOD_ORDER_ADDR);
+  if (wantHidden && !(lists?.hiddenPresent && lists.hiddenValid)) throw messageError('packSelectionMissing', MOD_HIDDEN_ADDR);
+  const order = wantOrder ? lists!.enabled : null;
+  const hidden = wantHidden ? lists!.hidden : null;
+
+  const wantedKeys = [...selected].filter(addr => /^(ls|ss):/.test(addr));
 
   // 未选中的分区不占份额，否则只导出几个键时，进度会停在到不了的 60%
   const weights = new Map<keyof typeof SECTION_WEIGHT, number>();
-  if ([...selected].some(addr => /^(ls|ss):/.test(addr))) weights.set('keys', SECTION_WEIGHT.keys);
+  if (wantedKeys.length > 0) weights.set('keys', SECTION_WEIGHT.keys);
   if (slots.size > 0 || wantLegacy) weights.set('saves', SECTION_WEIGHT.saves);
   if (wantedDbs.length > 0) weights.set('idb', SECTION_WEIGHT.idb);
   if (modNames.length > 0 || wantOrder || wantHidden) weights.set('mods', SECTION_WEIGHT.mods);
@@ -333,17 +334,19 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
 
   /* ---------- 键：localStorage / sessionStorage ---------- */
   const keys: { a: string; v: string }[] = [];
-  for (const entry of readLocal()) {
-    const addr = lsAddr(entry.key);
-    if (selected.has(addr)) keys.push({ a: addr, v: entry.value });
-  }
-  for (const entry of readSession()) {
-    const addr = ssAddr(entry.key);
-    if (selected.has(addr)) keys.push({ a: addr, v: entry.value });
+  // 保留原来的存储顺序（本地在前、会话在后），但只读勾选键的值。
+  for (const [kind, prefix, addressOf] of [['local', 'ls:', lsAddr], ['session', 'ss:', ssAddr]] as const) {
+    if (!wantedKeys.some(addr => addr.startsWith(prefix))) continue;
+    for (const key of listStorageKeys(kind)) {
+      const addr = addressOf(key);
+      if (!selected.has(addr)) continue;
+      const value = readKey(key, kind);
+      if (value !== null) keys.push({ a: addr, v: value });
+    }
   }
   const packedKeys = new Set(keys.map(item => item.a));
-  for (const addr of selected) {
-    if (/^(ls|ss):/.test(addr) && !packedKeys.has(addr)) throw messageError('packSelectionMissing', addr);
+  for (const addr of wantedKeys) {
+    if (!packedKeys.has(addr)) throw messageError('packSelectionMissing', addr);
   }
   if (keys.length > 0) {
     announce('keys.json');
@@ -354,8 +357,7 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
 
   /* ---------- 存档：槽与 details 成对 ---------- */
   if (slots.size > 0 || wantLegacy) {
-    const [saves, details] = await Promise.all([readSaves(), readDetails()]);
-    const picked = saves.filter(record => slots.has(record.slot));
+    const { saves: picked, details } = slots.size > 0 ? await readSaveSlots(slots) : { saves: [], details: [] };
     for (const slot of slots) {
       if (!picked.some(record => record.slot === slot)) throw messageError('packSelectionMissing', String(slot));
     }
@@ -470,11 +472,8 @@ export async function buildSections({ selected, blobs, onSection, onProgress, on
       plainSection(
         'mods',
         'mods.json',
-        {
-          order: wantOrder ? lists.enabled : null,
-          hidden: wantHidden ? lists.hidden : null,
-        },
-        (wantOrder ? lists.enabled.length : 0) + (wantHidden ? lists.hidden.length : 0) + modNames.length,
+        { order, hidden },
+        (order?.length ?? 0) + (hidden?.length ?? 0) + modNames.length,
         refs,
       ),
     );

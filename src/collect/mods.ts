@@ -9,9 +9,6 @@ import { injectedValues } from '../host/modloader';
 import {
   localModKeys,
   openModReader,
-  readIdbModLists,
-  readLocalMods,
-  readModNames,
   type ModValue,
 } from '../store/mods';
 import { publishBootMetas } from './bootmetas';
@@ -33,16 +30,17 @@ function flagsOf(isSelf: boolean, injected: boolean, disabled = false): ItemFlag
 export const modsCollector: Collector = {
   name: 'mods',
   async collect(ctx: CollectContext): Promise<CollectResult> {
-    const local = readLocalMods();
-    // 只要名字与两份列表：值动辄上百 MB，`readIdbMods()` 会把整库同时读进内存
-    const idbNames = (await readModNames()).idb;
-    const lists = await readIdbModLists();
+    // 名字与两份列表都可在本轮内复用，模组本体只读占优的存储副本。
+    const { local, idb } = await ctx.modNames();
+    const idbNames = new Set(idb);
+    const localNames = new Set(local);
+    const lists = await ctx.modLists();
 
     // 同名时 IndexedDB 后加载、以它为准；localStorage 只作溯源
     const loadOrder = new Map(lists.enabled.map((name, index) => [name, index]));
     // 禁用列表只针对 IndexedDB 层：包在、但重载时不会被加载
     const hidden = new Set(lists.hidden);
-    const names = [...new Set([...local.values.keys(), ...idbNames])].sort((left, right) => {
+    const names = [...new Set([...local, ...idb])].sort((left, right) => {
       const a = loadOrder.get(left) ?? Number.MAX_SAFE_INTEGER;
       const b = loadOrder.get(right) ?? Number.MAX_SAFE_INTEGER;
       return a === b ? left.localeCompare(right) : a - b;
@@ -53,11 +51,11 @@ export const modsCollector: Collector = {
     const items: Item[] = [];
     const metas = new Map<string, BootMeta>();
     // 一个连接、逐条取：每条读完只留下元信息与字节数，值本身不驻留
-    const reader = await openModReader();
+    const reader = names.length > 0 ? await openModReader({ idb: idbNames.size > 0 }) : null;
     try {
       for (const [position, name] of names.entries()) {
-        const entry = await reader.read(name);
-        const value = entry?.idb ?? entry?.local;
+        let value = idbNames.has(name) ? await reader?.readLayer('idb', name) : undefined;
+        if (value === undefined && localNames.has(name)) value = await reader?.readLayer('local', name);
         if (value === undefined) continue;
         const meta = await readBootMeta(value);
         if (meta) metas.set(name, meta);
@@ -78,7 +76,7 @@ export const modsCollector: Collector = {
         });
       }
     } finally {
-      reader.close();
+      reader?.close();
     }
 
     // 由当前页面注入的模组：没有文件名，按 boot.json 的 name 造存储名；
@@ -118,7 +116,7 @@ export const modsCollector: Collector = {
       items,
       claims: [
         lsAddr(localKeys.list),
-        ...[...local.values.keys()].map(name => lsAddr(`${localKeys.prefix}${name}`)),
+        ...local.map(name => lsAddr(`${localKeys.prefix}${name}`)),
       ],
     };
   },

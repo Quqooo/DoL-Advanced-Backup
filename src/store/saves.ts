@@ -7,7 +7,7 @@ import {
 } from '../core/constants';
 import { messageError } from '../core/error';
 import { dateOf } from '../core/savemeta';
-import { abortQuietly, close, ensureDb, getAll, openDb } from './idb';
+import { abortQuietly, close, ensureDb, getAll, openDb, request } from './idb';
 import { readKey } from './local';
 
 export interface SaveRecord {
@@ -59,6 +59,36 @@ export function readSaves(): Promise<SaveRecord[]> {
 
 export function readDetails(): Promise<DetailRecord[]> {
   return readStore(DETAIL_STORE);
+}
+
+/** 兜底只需要槽号；即使存档值读取失败，也可尝试列出主键。 */
+export async function listSaveSlots(): Promise<number[]> {
+  const db = await openDb(gameDb);
+  if (!db) return [];
+  try {
+    const keys = await request(db.transaction(SAVE_STORE, 'readonly').objectStore(SAVE_STORE).getAllKeys());
+    return keys.filter((key): key is number => typeof key === 'number').sort((a, b) => a - b);
+  } finally {
+    close(db);
+  }
+}
+
+/** 导出只搬运勾选的槽；两仓的请求在同一只读事务里排入。 */
+export async function readSaveSlots(slots: ReadonlySet<number>): Promise<{ saves: SaveRecord[]; details: DetailRecord[] }> {
+  if (slots.size === 0) return { saves: [], details: [] };
+  const db = await openDb(gameDb);
+  if (!db) return { saves: [], details: [] };
+  try {
+    const tx = db.transaction([SAVE_STORE, DETAIL_STORE], 'readonly');
+    const read = (name: string): Promise<unknown[]> => {
+      const store = tx.objectStore(name);
+      return Promise.all([...slots].map(slot => request(store.get(slot))));
+    };
+    const [saves, details] = await Promise.all([read(SAVE_STORE), read(DETAIL_STORE)]);
+    return { saves: normalize(saves), details: normalize(details) };
+  } finally {
+    close(db);
+  }
 }
 
 /** legacy 两键原样文本；不存在时为 null，调用方自己决定要不要解析 */

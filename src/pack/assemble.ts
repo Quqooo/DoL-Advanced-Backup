@@ -1,4 +1,4 @@
-import { throwIfAborted } from '../core/error';
+import { messageError, throwIfAborted } from '../core/error';
 import { groupOf } from '../core/group';
 import { entriesOfMods, list as mappingList, type MappingEntry } from '../core/mapping';
 import { packMappingOf } from '../core/mapping/pack';
@@ -148,16 +148,19 @@ export async function packTo(
     manifest.options.skipped = skipped;
   }
 
-  const reader = await openModReader();
+  throwIfAborted(hooks.signal);
+  const reader = modNames.length > 0 ? await openModReader() : null;
   try {
     // 注入的模组不在任何存储层里，名字按 boot.json 现算；两趟都要用，只建一次
     let injected: Map<string, Uint8Array> | null = null;
     const injectedOf = async (): Promise<Map<string, Uint8Array>> => {
+      throwIfAborted(hooks.signal);
       if (injected) return injected;
       const map = new Map<string, Uint8Array>();
       for (const [index, raw] of injectedValues().entries()) {
         const bytes = base64ToBytes(raw);
         const stored = injectedModName((await readBootMeta(bytes))?.name, index);
+        throwIfAborted(hooks.signal);
         if (!map.has(stored)) map.set(stored, bytes);
       }
       injected = map;
@@ -165,8 +168,9 @@ export async function packTo(
     };
 
     // 第一趟：只留元数据，字节读完就丢
-    const planned = await planMods(modNames, reader, injectedOf, ratio =>
-      emit('plan', COLLECT_END + ratio * (PLAN_END - COLLECT_END)));
+    const planned = reader
+      ? await planMods(modNames, reader, injectedOf, ratio => emit('plan', COLLECT_END + ratio * (PLAN_END - COLLECT_END)), hooks.signal)
+      : { plans: [], items: [] };
     manifest.mods = { items: planned.items };
     manifest.blobs = blobs.list().map(item => item.blob);
     if (packed) {
@@ -278,10 +282,11 @@ export async function packTo(
       for (const entry of entries) await writer.add(entry);
       for (const plan of planned.plans) {
         throwIfAborted(hooks.signal);
-        const found = await readMod(reader, plan.stored, injectedOf);
-        if (!found) throw new Error(`模组 ${plan.stored} 在导出过程中不见了`);
+        const found = reader && await readMod(reader, plan.stored, injectedOf);
+        if (!found) throw messageError('modChangedDuringExport', plan.stored);
         await assertModUnchanged(plan, found.bytes);
-        await writer.add({ name: plan.file, data: found.bytes, method: 0 });
+        throwIfAborted(hooks.signal);
+        await writer.add({ name: plan.file, data: found.bytes, method: 0, crc: plan.crc });
       }
       throwIfAborted(hooks.signal);
       await writer.finish();
@@ -320,6 +325,6 @@ export async function packTo(
       name: packName(at, wrapped ? '-modpack' : ''),
     };
   } finally {
-    reader.close();
+    reader?.close();
   }
 }

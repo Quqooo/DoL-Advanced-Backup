@@ -10,7 +10,7 @@ import { databases } from '../../store/idb';
 import { removePendingDrop } from '../../store/pending-drop';
 import { loadBlobs } from '../bundle';
 import { mirrorPlan } from '../clean';
-import { mirrorCandidates, mirrorScopeOf } from '../plan';
+import { prepareMirror } from '../plan/mirror';
 import type { RestorePlan, RestoreReport } from '../types';
 import { applyDbs, openDbSections } from './dbs';
 import { applyKeys } from './keys';
@@ -120,22 +120,10 @@ export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
   const blobs = await validatePayloads(input.plan, input.selected, input.signal);
   emit(LOAD_END);
 
-  // 缺省豁免：与下面镜像用的是同一个值
-  const keepSelf = input.keepSelf !== false;
-  /**
-   * 删除范围：干净是整机，覆盖只有手动存档 / 模组包 / 解密口令三组，合并与补缺不删。
-   * 范围里一个勾选都没有（整组未勾）时是 `null`——这组当作不存在。
-   */
-  const scope = mirrorScopeOf(input.plan.mode, input.plan.items, input.selected);
-  /**
-   * 删除名单在写入之前就要算好：模组包写列表时要知道哪些包随后会被卸载，
-   * 否则顺序列表里会留下一批已经不存在的名字（ModLoaderGui 会列出来、重载还会报错）。
-   */
-  // 跳过条目与勾选条目同样受保护：它们不在包里，不能因此被当成「本机多余」
-  const guarded = new Set([...input.selected, ...(input.plan.protected ?? [])]);
-  const dropped = mirrorCandidates(input.plan.local, guarded, keepSelf, scope);
+  const { scope, candidates } = input.mirror ?? prepareMirror(input.plan, input.selected, input.keepSelf !== false);
+  // 写模组列表时排除稍后会被卸载的包，以避免留下无效条目。
   const droppedMods = new Set(
-    dropped
+    candidates
       .filter(item => item.kind === 'mod')
       .map(item => nameOfAddr(item.addr))
       .filter((name): name is string => name !== null),
@@ -198,10 +186,7 @@ export async function applyPlan(input: ApplyInput): Promise<RestoreReport> {
       // 逐条失败与整步失败都要算：前者记在条目的分类上，后者由步骤自己声明
       const failed = new Set<Category>([...report.failures.map(item => item.category), ...stepFailures]);
       const mirror = await mirrorPlan({
-        plan: input.plan,
-        selected: guarded,
-        keepSelf,
-        scope,
+        candidates,
         failed,
         selfPack: state.selfPack,
       });

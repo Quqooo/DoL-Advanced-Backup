@@ -1,5 +1,4 @@
 import type { StoredPack } from '../app/packStore';
-import { removeStoredPacks } from '../app/packStore';
 import { chooseDialog } from '../host/dialog';
 import { openPanel } from '../host/overlay';
 import { t } from './i18n';
@@ -13,10 +12,7 @@ import { escapeHtml } from './panel/dom';
  * 那里会先计算将删除的数据、允许选择模式并显示警告。因此先把它从模组列表移除
  * （否则下次重载它还会抢在游戏起来之前弹窗），再问要不要现在就打开恢复页。
  */
-export async function notifyStoredPacks(packs: readonly StoredPack[]): Promise<void> {
-  const first = packs[0];
-  if (!first) return;
-  const removed = await removeStoredPacks(packs);
+export async function notifyStoredPacks(first: StoredPack, removed: boolean): Promise<void> {
   const strings = t();
   const answer = await chooseDialog({
     title: strings.packFoundTitle,

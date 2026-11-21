@@ -2,6 +2,7 @@ import type { MessageError } from '../../core/error';
 import { categoryOfGroup, type Item } from '../../core/item';
 import type { Category } from '../../core/types';
 import type { BlobResolver } from '../../pack/encode';
+import type { RestoreMirror } from '../plan/mirror';
 import type { RestorePlan, RestoreReport, RestoreWarning } from '../types';
 
 export interface ApplyInput {
@@ -11,6 +12,8 @@ export interface ApplyInput {
   selfPack?: boolean;
   /** 干净恢复下本模组及其数据是否豁免删除；缺省豁免 */
   keepSelf?: boolean;
+  /** 正常入口传入同一份用于确认的候选；直接调用时按计划计算。 */
+  mirror?: RestoreMirror;
   /** 0..1 覆盖载入数据块与全部写入；`label` 是当前步骤 */
   onProgress?: (progress: { ratio: number; label?: string }) => void;
   /** 只在阶段边界生效：一类数据要么写完，要么不写，避免半套状态 */

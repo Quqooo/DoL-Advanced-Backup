@@ -1,7 +1,8 @@
 import { throwIfAborted } from '../core/error';
 import type { Item } from '../core/item';
 import { verifySectionIndex } from './plan/sections';
-import type { RestoreMode } from '../core/types';
+import type { Category, RestoreMode } from '../core/types';
+import { countDeletions, prepareMirror } from './plan/mirror';
 import { applyPlan } from './apply';
 import { openBundle, type Bundle } from './bundle';
 import { planRestore } from './plan';
@@ -25,8 +26,8 @@ export interface RestoreInput {
   selfPack?: boolean;
   /** 本机现状：删除预告与镜像都靠它做差集 */
   scanned?: { items: Item[] } | null;
-  /** 写入前调用：自动快照挂这里，保证「先留档再动手」 */
-  onBeforeWrite?: (plan: RestorePlan) => Promise<void>;
+  /** 用本次执行的删除候选确认后，再创建自动快照。 */
+  onBeforeWrite?: (plan: RestorePlan, deletions: Readonly<Partial<Record<Category, number>>>) => Promise<void>;
   /** `compare` 覆盖解包与比对，`apply` 覆盖载入数据块与全部写入 */
   onProgress?: (progress: { phase: 'compare' | 'apply'; ratio: number; label?: string }) => void;
   signal?: AbortSignal;
@@ -53,11 +54,14 @@ export async function restorePackage(input: RestoreInput): Promise<RestoreOutcom
   );
   verifySectionIndex(bundle, plan.sections);
   throwIfAborted(input.signal);
-  await input.onBeforeWrite?.(plan);
   const selected = input.selected ?? plan.available;
+  const mirror = prepareMirror(plan, selected, input.keepSelf !== false);
+  await input.onBeforeWrite?.(plan, countDeletions(mirror.candidates));
+  throwIfAborted(input.signal);
   const report = await applyPlan({
     plan,
     selected,
+    mirror,
     ...(input.selfPack ? { selfPack: true } : {}),
     ...(input.keepSelf === false ? { keepSelf: false } : {}),
     ...(input.onProgress ? { onProgress: p => input.onProgress?.({ phase: 'apply', ...p }) } : {}),

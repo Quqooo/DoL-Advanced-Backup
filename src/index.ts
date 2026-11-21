@@ -119,6 +119,6 @@ if (isRestorePack(self)) {
     // 没有加载结束回调时这里是唯一时机；有回调时上一次已经清完，标记为空
     dropPendingOnce();
     // 正本运行时，自恢复包不应在游戏启动前弹窗：装入后立即移除，改由「恢复」分页处理
-    startPackWatch(packs => void notifyStoredPacks(packs));
+    startPackWatch(notifyStoredPacks);
   });
 }

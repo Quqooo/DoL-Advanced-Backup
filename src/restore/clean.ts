@@ -4,20 +4,14 @@ import type { Category, DeleteResult } from '../core/types';
 import { removeAddr } from '../store/address';
 import { addPendingDrop, isProtectedDb } from '../store/pending-drop';
 import { uninstallMod } from './mods';
-import { mirrorCandidates, type MirrorScope } from './plan';
-import type { RestoreFailure, RestorePlan } from './types';
+import type { RestoreFailure } from './types';
 
 /** 删除按分类汇总，顺序固定（含会话存储），读报告时不会前后跳 */
 const ORDER: readonly Category[] = ['saves', 'progress', 'settings', 'session', 'mods', 'moddata', 'other'];
 
 export interface MirrorInput {
-  plan: RestorePlan;
-  /** 这次勾选的地址：不在里面的一律删 */
-  selected: ReadonlySet<string>;
-  /** 本模组及其数据不参与删除（仍可被包内版本覆盖） */
-  keepSelf: boolean;
-  /** 删除范围：干净是整机，覆盖只有手动存档 / 模组包 / 解密口令三组 */
-  scope: MirrorScope;
+  /** 执行扫描所得的删除候选；不再读取本机现状来扩大范围。 */
+  candidates: readonly Item[];
   /** 写入阶段出过错的分类：该分类跳过删除，避免「写一半又删一半」 */
   failed: ReadonlySet<Category>;
   /**
@@ -60,7 +54,6 @@ function pendingDbOf(item: Item): string | null {
  */
 export async function mirrorPlan(input: MirrorInput): Promise<MirrorOutcome> {
   const out: MirrorOutcome = { deleted: {}, failures: [], skipped: [] };
-  const drop = mirrorCandidates(input.plan.local, input.selected, input.keepSelf, input.scope);
   const pending: string[] = [];
 
   for (const category of ORDER) {
@@ -69,7 +62,7 @@ export async function mirrorPlan(input: MirrorInput): Promise<MirrorOutcome> {
       continue;
     }
     let removed = 0;
-    for (const item of drop) {
+    for (const item of input.candidates) {
       if (categoryOfGroup(item.group) !== category) continue;
       // 记录位置必须在循环内：跳过的分类不能进标记
       if (!input.selfPack) {

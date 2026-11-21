@@ -80,7 +80,7 @@ interface BsonRead {
  *
  * `limit` 是**所在文档**的结尾（不含结尾 NUL）：每个类型都要按它检查读到的长度，
  * 仅检查整体字节边界会允许子文档越过自身范围，将后续父级元素解析为子文档内容。
- * 越界一律抛错——调用方（`readLayout` / `readModPackMeta` / `readModPackLayoutFrom`）
+ * 越界一律抛错——调用方（`readModPackLayout` / `readModPackMeta` / `readModPackLayoutFrom`）
  * 把它当作「不是本格式」并返回 null。
  */
 function readBsonValue(bytes: Uint8Array, view: DataView, type: number, at: number, limit: number): BsonRead {
@@ -202,13 +202,8 @@ export function isModPack(bytes: Uint8Array): boolean {
   return startsWithMagic(bytes, HEADER);
 }
 
-interface ModPackLayout {
-  meta: Record<string, unknown>;
-  dataStart: number;
-}
-
 /** 魔数 + 头部校验 + 元数据 BSON 解析；不是容器或结构损坏返回 null */
-function readLayout(bytes: Uint8Array): ModPackLayout | null {
+export function readModPackLayout(bytes: Uint8Array): ModPackRemoteLayout | null {
   if (!startsWithMagic(bytes, HEADER)) return null;
   try {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -226,7 +221,7 @@ function readLayout(bytes: Uint8Array): ModPackLayout | null {
 
 /** 容器里的条目名（= 元数据 fileMeta 的键），读不出返回空数组 */
 export function listModPackEntries(bytes: Uint8Array): string[] {
-  const layout = readLayout(bytes);
+  const layout = readModPackLayout(bytes);
   if (!layout) return [];
   const fileMeta = layout.meta.fileMeta;
   if (!fileMeta || typeof fileMeta !== 'object') return [];
@@ -275,6 +270,15 @@ export function modPackEntryRange(
   name: string,
   size: number,
 ): { start: number; length: number } | null {
+  const range = entryRange(layout, name, size);
+  return range && range.length > 0 ? range : null;
+}
+
+function entryRange(
+  layout: ModPackRemoteLayout,
+  name: string,
+  size: number,
+): { start: number; length: number } | null {
   const fileMeta = layout.meta.fileMeta;
   if (!fileMeta || typeof fileMeta !== 'object') return null;
   const record = recordOf((fileMeta as Record<string, unknown>)[name]);
@@ -283,25 +287,18 @@ export function modPackEntryRange(
     ? layout.meta.blockSize
     : BLOCK;
   const start = layout.dataStart + record.b * blockSize;
-  if (start < 0 || record.l <= 0 || start + record.l > size) return null;
+  if (!Number.isSafeInteger(record.b) || record.b < 0 || !Number.isSafeInteger(blockSize)) return null;
+  if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(record.l)
+    || record.l < 0 || record.l > size - start) return null;
   return { start, length: record.l };
 }
 
 /** 按块元数据读出单个文件；偏移越界或没有这条返回 null。交出的是独立副本 */
 export function readModPackEntry(bytes: Uint8Array, name: string): Uint8Array | null {
-  const layout = readLayout(bytes);
+  const layout = readModPackLayout(bytes);
   if (!layout) return null;
-  const fileMeta = layout.meta.fileMeta;
-  if (!fileMeta || typeof fileMeta !== 'object') return null;
-  const record = recordOf((fileMeta as Record<string, unknown>)[name]);
-  if (!record) return null;
-  const blockSize = typeof layout.meta.blockSize === 'number' && layout.meta.blockSize > 0
-    ? layout.meta.blockSize
-    : BLOCK;
-  const from = layout.dataStart + record.b * blockSize;
-  const to = from + record.l;
-  if (from < 0 || to > bytes.length) return null;
-  return bytes.slice(from, to);
+  const range = entryRange(layout, name, bytes.length);
+  return range ? bytes.slice(range.start, range.start + range.length) : null;
 }
 
 // libsodium 的 from_base64 默认变体不接受 `=` padding，ModLoader 写端（to_base64）也不带

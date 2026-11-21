@@ -1,6 +1,7 @@
 import { categoryOfGroup, type Item } from '../../core/item';
 import { isSnapshotAddr } from '../../core/presets';
 import type { Category, RestoreMode } from '../../core/types';
+import type { RestorePlan } from '../types';
 
 /**
  * 无论什么模式都不参与镜像的条目。
@@ -72,6 +73,20 @@ export function mirrorCandidates(
   });
 }
 
+export interface RestoreMirror {
+  scope: MirrorScope;
+  candidates: readonly Item[];
+}
+
+/** 删除候选与勾选范围在执行前确定，确认后不再从本机状态重算。 */
+export function prepareMirror(plan: RestorePlan, selected: ReadonlySet<string>, keepSelf: boolean): RestoreMirror {
+  const scope = mirrorScopeOf(plan.mode, plan.items, selected);
+  if (scope === null) return { scope, candidates: [] };
+  // 跳过条目不在包里，但和勾选地址一样受保护。
+  const guarded = new Set([...selected, ...plan.protected]);
+  return { scope, candidates: mirrorCandidates(plan.local, guarded, keepSelf, scope) };
+}
+
 /** 删除预告：与镜像同一套判定，界面上的数字才对得上实际动作 */
 export function forecastDeletions(
   local: readonly Item[] | null,
@@ -79,8 +94,12 @@ export function forecastDeletions(
   keepSelf: boolean,
   scope: MirrorScope,
 ): Partial<Record<Category, number>> {
+  return countDeletions(mirrorCandidates(local, selected, keepSelf, scope));
+}
+
+export function countDeletions(candidates: readonly Item[]): Partial<Record<Category, number>> {
   const counts: Partial<Record<Category, number>> = {};
-  for (const item of mirrorCandidates(local, selected, keepSelf, scope)) {
+  for (const item of candidates) {
     const category = categoryOfGroup(item.group);
     counts[category] = (counts[category] ?? 0) + 1;
   }

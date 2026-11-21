@@ -57,13 +57,19 @@ export async function putSnapshot(meta: SnapshotMeta, payload: Blob | Uint8Array
       const tx = db.transaction([SNAP_META_STORE, SNAP_PAYLOAD_STORE], 'readwrite');
       const add = tx.objectStore(SNAP_META_STORE).add(meta);
       let id = 0;
+      let syncFailure: { error: unknown } | undefined;
       add.onsuccess = () => {
         id = Number(add.result);
-        tx.objectStore(SNAP_PAYLOAD_STORE).put({ id, blob: payload });
+        try {
+          tx.objectStore(SNAP_PAYLOAD_STORE).put({ id, blob: payload });
+        } catch (error) {
+          // 同步异常不会触发请求的 error 事件。回滚后将原异常交给 Blob 回退逻辑。
+          syncFailure = { error };
+          try { tx.abort(); } catch { reject(error); }
+        }
       };
       tx.oncomplete = () => resolve(id);
-      tx.onerror = () => reject(tx.error ?? messageError('snapshotWriteFailed'));
-      tx.onabort = () => reject(tx.error ?? messageError('snapshotWriteAborted'));
+      tx.onabort = () => reject(syncFailure ? syncFailure.error : tx.error ?? messageError('snapshotWriteAborted'));
     });
   } finally {
     db.close();

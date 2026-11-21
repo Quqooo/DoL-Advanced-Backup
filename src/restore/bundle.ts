@@ -2,7 +2,7 @@ import { hex32 } from '../core/format';
 import { SELF_PACK_INNER } from '../core/constants';
 import { MessageError, type MessageParam } from '../core/error';
 import { parseJson } from '../core/json';
-import { dbFilesOf, parseManifest, type Manifest, type ManifestSection } from '../core/manifest';
+import { parseManifest, type Manifest, type ManifestSection } from '../core/manifest';
 import { hasModPackMagic, modPackEntryRange, readModPackLayoutFrom } from '../core/modpack';
 import { decodeEntry } from '../pack/codec';
 import { blobSource, bytesSource, openZip, sliceSource, Zip64Unsupported, ZipEntryCorrupt, type ZipSource } from '../core/zipread';
@@ -28,11 +28,13 @@ function fail(code: BundleErrorCode, id: string, ...params: MessageParam[]): nev
 /** 来源包：zip 或快照里那份 STORE 的 zip，结构完全一致 */
 export interface Bundle {
   manifest: Manifest;
-  /** 包内实际存在的条目名，判断分区有没有被勾选 */
+  /** 包内实际存在的条目名；恢复分区以清单为准。 */
   names: Set<string>;
   has(path: string): boolean;
   read(path: string): Promise<Uint8Array>;
   readJson<T>(path: string): Promise<T>;
+  /** 复用已打开的包时，单次执行结束即可释放旧格式的整库缓存。 */
+  releaseLegacyIdb?: () => void;
 }
 
 const decoder = new TextDecoder();
@@ -70,6 +72,47 @@ export const MANIFEST_IDS: Record<string, string> = {
   shape: 'bundleShape',
 };
 
+const fixedSectionPaths = new Map([
+  ['keys', 'keys.json'], ['saves', 'saves.json'], ['mods', 'mods.json'], ['idb', 'idb.json'],
+]);
+const reservedSectionPaths = new Set(fixedSectionPaths.values());
+
+interface SectionDirectory {
+  singles: ReadonlyMap<string, ManifestSection>;
+  databases: ReadonlyMap<string, ManifestSection>;
+}
+
+const directories = new WeakMap<Manifest, SectionDirectory>();
+
+/** 单例分区按 id 查找，v3 库按库名查找；两者均只接受清单登记的文件。 */
+export function sectionDirectory(manifest: Manifest): SectionDirectory {
+  const cached = directories.get(manifest);
+  if (cached) return cached;
+  const singles = new Map<string, ManifestSection>();
+  const databases = new Map<string, ManifestSection>();
+  const files = new Set<string>();
+  for (const section of manifest.sections) {
+    const { id, db, file } = section;
+    if (files.has(file)) fail('verify', 'bundleSectionShape', file);
+    files.add(file);
+    if (id === 'idb' && manifest.format >= 3) {
+      if (db === undefined || databases.has(db) || reservedSectionPaths.has(file)) {
+        fail('verify', 'bundleSectionShape', file);
+      }
+      databases.set(db, section);
+    } else {
+      const fixed = fixedSectionPaths.get(id);
+      if (singles.has(id) || db !== undefined || (fixed ? fixed !== file : reservedSectionPaths.has(file))) {
+        fail('verify', 'bundleSectionShape', file);
+      }
+      singles.set(id, section);
+    }
+  }
+  const directory = { singles, databases };
+  directories.set(manifest, directory);
+  return directory;
+}
+
 /** 中央目录里能直接拿到的两项：未压缩大小与 CRC32 */
 export interface ZipEntryMeta {
   size: number;
@@ -84,15 +127,15 @@ export interface ZipEntryMeta {
  * 索引因此可以放心当目录用——截断、换包、索引与分区不同源，都在这一关拦下。
  */
 export function verifyIndex(manifest: Manifest): void {
-  const sectionOf = (id: string): ManifestSection | undefined => manifest.sections.find(section => section.id === id);
-  const countOf = (id: string): number => sectionOf(id)?.entries ?? 0;
+  const { singles, databases } = sectionDirectory(manifest);
+  const countOf = (id: string): number => singles.get(id)?.entries ?? 0;
 
   if (countOf('keys') !== manifest.index.keys.length) {
     fail('verify', 'bundleKeyIndex', manifest.index.keys.length, countOf('keys'));
   }
   // 存档分区一条记录带 saves 与 details 两份，用槽数与索引精确对照；
   // 老包没有 slots，只能保留「索引不能多于条目」的弱判据
-  const saves = sectionOf('saves');
+  const saves = singles.get('saves');
   if (saves?.slots !== undefined) {
     if (manifest.index.saves.length !== saves.slots) {
       fail('verify', 'bundleSaveIndex', manifest.index.saves.length, saves.slots);
@@ -103,12 +146,11 @@ export function verifyIndex(manifest: Manifest): void {
   // 整库：v3 一库一条分区，库名必须与索引一一对应；v1/v2 只有一条，按库数对照。
   // 导出途中消失或被跳过的库既没有分区也没有索引项，两边同样少一条
   if (manifest.format >= 3) {
-    const files = dbFilesOf(manifest);
-    if (files.size !== manifest.index.dbs.length || manifest.index.dbs.some(db => !files.has(db.name))) {
-      fail('verify', 'bundleDbIndex', manifest.index.dbs.length, files.size);
+    if (databases.size !== manifest.index.dbs.length || manifest.index.dbs.some(db => !databases.has(db.name))) {
+      fail('verify', 'bundleDbIndex', manifest.index.dbs.length, databases.size);
     }
   } else {
-    const idb = sectionOf('idb');
+    const idb = singles.get('idb');
     if (idb?.dbs !== undefined) {
       if (manifest.index.dbs.length !== idb.dbs) {
         fail('verify', 'bundleDbIndex', manifest.index.dbs.length, idb.dbs);
@@ -141,7 +183,9 @@ export function verifyEntries(
     if (hex32(entry.crc) !== crc32) fail('verify', 'bundleCrcMismatch', file);
   };
 
-  for (const section of manifest.sections) check(section.file, section.bytes, section.crc32);
+  const { singles, databases } = sectionDirectory(manifest);
+  for (const section of singles.values()) check(section.file, section.bytes, section.crc32);
+  for (const section of databases.values()) check(section.file, section.bytes, section.crc32);
   for (const item of manifest.mods.items) check(item.file, item.bytes, item.crc32);
   for (const blob of manifest.blobs) {
     // 数据块只服务写入：缺了留给 missing-entry 警告，不拦建树
@@ -237,7 +281,7 @@ export async function openBundle(source: Uint8Array | Blob): Promise<Bundle> {
     return data;
   };
 
-  return bundleOf(manifest, names, read);
+  return { ...bundleOf(manifest, names, read), releaseLegacyIdb: () => { idbBytes = null; } };
 }
 
 /**

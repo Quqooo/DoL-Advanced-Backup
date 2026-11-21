@@ -9,7 +9,6 @@ import {
 import { messageError } from '../../core/error';
 import { categoryOfGroup } from '../../core/item';
 import { parseJson, stringifyJson } from '../../core/json';
-import { dbFilesOf } from '../../core/manifest';
 import { findValueStart, jsonRange, splitElements, textOf, type JsonRange } from '../../core/jsonscan';
 import type { RestoreMode } from '../../core/types';
 import { createDecoder } from '../../pack/decode';
@@ -17,6 +16,7 @@ import type { BlobResolver } from '../../pack/graph';
 import { writeAddr } from '../../store/address';
 import { close, getAllWithKeys, openDb, type DbKey } from '../../store/idb';
 import type { DbDump } from '../../store/idb/dump';
+import { sectionDirectory } from '../bundle';
 import { mergeOrderList } from '../merge';
 import { skipsDb } from '../plan';
 import type { DbSection, RestorePlan } from '../types';
@@ -118,8 +118,9 @@ async function idbSourceOf(plan: RestorePlan): Promise<IdbSource | null> {
 }
 
 async function openIdbSource(bundle: RestorePlan['bundle']): Promise<IdbSource | null> {
-  if (!bundle.has('idb.json')) return null;
-  const bytes = await bundle.read('idb.json');
+  const section = sectionDirectory(bundle.manifest).singles.get('idb');
+  if (!section) return null;
+  const bytes = await bundle.read(section.file);
   // 只查找起点：整个分区的绝大部分都在这个数组里，为了定位它先遍历一次没有收益
   const dbsStart = findValueStart(bytes, jsonRange(bytes), 'dbs');
   if (dbsStart === null) return null;
@@ -144,12 +145,12 @@ function assertDbSection(section: DbSection, name: string): DbSection {
  * 返回的函数每次都给新对象——调用方会就地解码，不能与别处共用。
  */
 export async function openDbSections(plan: RestorePlan): Promise<(name: string) => Promise<DbSection>> {
-  const files = dbFilesOf(plan.bundle.manifest);
-  if (files.size > 0) {
+  if (plan.bundle.manifest.format >= 3) {
+    const { databases } = sectionDirectory(plan.bundle.manifest);
     return async name => {
-      const file = files.get(name);
-      if (file === undefined) throw messageError('bundleAddressMismatch');
-      return assertDbSection(await plan.bundle.readJson<DbSection>(file), name);
+      const section = databases.get(name);
+      if (!section) throw messageError('bundleAddressMismatch');
+      return assertDbSection(await plan.bundle.readJson<DbSection>(section.file), name);
     };
   }
   const skeleton = plan.sections.idb?.dbs ?? [];

@@ -3,7 +3,7 @@ import { messageError } from '../core/error';
 import { stringifyJson } from '../core/json';
 import type { DeleteResult } from '../core/types';
 import { close, deleteByKeys, ensureDb, getAllWithKeys, openDb, putRecords, request } from './idb';
-import { readKey, readLocal, removeKeys } from './local';
+import { listStorageKeys, readKey, removeKeys } from './local';
 import { localModKeys, modKeys, type ModKeys } from './modkeys';
 
 export { localModKeys, modKeys };
@@ -86,7 +86,7 @@ export async function readIdbMods(): Promise<IdbMods> {
 }
 
 /** 只要两个列表键时用这个，避免把几十 MB 的模组包一起读出来 */
-export async function readIdbModLists(): Promise<{
+export async function readIdbModLists(wanted = { order: true, hidden: true }): Promise<{
   enabled: string[];
   hidden: string[];
   /** 列表键本身在不在：缺了表示从没启用/禁用过，镜像时不该造出一个空列表 */
@@ -103,8 +103,8 @@ export async function readIdbModLists(): Promise<{
     const tx = db.transaction(keys.store, 'readonly');
     const store = tx.objectStore(keys.store);
     const [list, hidden] = await Promise.all([
-      request(store.get(keys.list)),
-      request(store.get(keys.hidden)),
+      wanted.order ? request(store.get(keys.list)) : undefined,
+      wanted.hidden ? request(store.get(keys.hidden)) : undefined,
     ]);
     const order = parseList(list);
     const hiddenList = parseList(hidden);
@@ -123,7 +123,7 @@ export async function readIdbModLists(): Promise<{
 
 /** 只要名字时用这个：两层都列，不读模组包本体 */
 /** `opened` 为 false 表示模组库没打开（库名不对 / 宿主没就绪），此时 idb 为空不代表「没装模组」 */
-export async function readModNames(): Promise<{ idb: string[]; local: string[]; opened: boolean }> {
+export async function readModNames(localKeys?: readonly string[]): Promise<{ idb: string[]; local: string[]; opened: boolean }> {
   const keys = modKeys();
   const idb: string[] = [];
   const db = await openDb(keys.db);
@@ -141,7 +141,10 @@ export async function readModNames(): Promise<{ idb: string[]; local: string[]; 
       close(db);
     }
   }
-  return { idb, local: [...readLocalMods().values.keys()], opened };
+  const local = (localKeys ?? listStorageKeys('local'))
+    .filter(key => key !== keys.localList && key.startsWith(keys.localPrefix))
+    .map(key => key.slice(keys.localPrefix.length));
+  return { idb, local, opened };
 }
 
 /**
@@ -199,7 +202,7 @@ export async function readModValue(name: string): Promise<ModValue | undefined> 
       close(db);
     }
   }
-  return readLocalMods().values.get(name);
+  return readLocalMod(name, keys);
 }
 
 export interface ModEntry {
@@ -209,32 +212,39 @@ export interface ModEntry {
   local?: string;
 }
 
-/**
- * 逐条读模组包：导出时一个包读进来、写进 zip、立刻丢掉，不必把选中的几十上百 MB 同时驻留。
- * 本地层一次读完（base64 字符串本来就在 localStorage 里），IDB 层每条一个事务。
- */
+function readLocalMod(name: string, keys: ModKeys): string | undefined {
+  const key = `${keys.localPrefix}${name}`;
+  return key === keys.localList ? undefined : (readKey(key) ?? undefined);
+}
+
+/** 逐条读模组包：两层都按名取值，IDB 层每条一个事务，不把本地层整批留在 reader 里。 */
 export interface ModReader {
   read(name: string): Promise<ModEntry | undefined>;
+  readLayer(layer: 'local', name: string): Promise<string | undefined>;
+  readLayer(layer: 'idb' | 'local', name: string): Promise<ModValue | undefined>;
   close(): void;
 }
 
-export async function openModReader(): Promise<ModReader> {
+export async function openModReader({ idb = true } = {}): Promise<ModReader> {
   const keys = modKeys();
-  const db = await openDb(keys.db);
-  const local = readLocalMods().values;
+  const db = idb ? await openDb(keys.db) : null;
+  const readIdb = async (name: string): Promise<ModValue | undefined> => {
+    if (!db) return undefined;
+    const value = await request(db.transaction(keys.store, 'readonly').objectStore(keys.store).get(`${keys.prefix}${name}`));
+    return typeof value === 'string' || value instanceof Uint8Array ? value : undefined;
+  };
+  function readLayer(layer: 'local', name: string): Promise<string | undefined>;
+  function readLayer(layer: 'idb' | 'local', name: string): Promise<ModValue | undefined>;
+  async function readLayer(layer: 'idb' | 'local', name: string): Promise<ModValue | undefined> {
+    return layer === 'idb' ? readIdb(name) : readLocalMod(name, keys);
+  }
   return {
     async read(name) {
-      const entry: ModEntry = {};
-      if (db) {
-        const value = await request(
-          db.transaction(keys.store, 'readonly').objectStore(keys.store).get(`${keys.prefix}${name}`),
-        );
-        if (typeof value === 'string' || value instanceof Uint8Array) entry.idb = value as ModValue;
-      }
-      const value = local.get(name);
-      if (value !== undefined) entry.local = value;
-      return entry.idb === undefined && entry.local === undefined ? undefined : entry;
+      const idb = await readIdb(name);
+      const local = readLocalMod(name, keys);
+      return idb === undefined && local === undefined ? undefined : { idb, local };
     },
+    readLayer,
     close: () => close(db),
   };
 }
@@ -267,9 +277,8 @@ export async function readModEntries(names: readonly string[]): Promise<Map<stri
     }
   }
 
-  const local = readLocalMods().values;
   for (const name of names) {
-    const value = local.get(name);
+    const value = readLocalMod(name, keys);
     if (value === undefined) continue;
     out.set(name, { ...(out.get(name) ?? {}), local: value });
   }
@@ -281,13 +290,11 @@ export function readLocalMods(): LocalMods {
   const keys = localModKeys();
   const values = new Map<string, string>();
   let list: string[] = [];
-  for (const entry of readLocal()) {
-    if (entry.key === keys.list) {
-      list = parseList(entry.value).values;
-      continue;
-    }
-    if (entry.key.startsWith(keys.prefix)) {
-      values.set(entry.key.slice(keys.prefix.length), entry.value);
+  for (const key of listStorageKeys('local')) {
+    if (key === keys.list) list = parseList(readKey(key)).values;
+    else if (key.startsWith(keys.prefix)) {
+      const value = readKey(key);
+      if (value !== null) values.set(key.slice(keys.prefix.length), value);
     }
   }
   return { list, values };

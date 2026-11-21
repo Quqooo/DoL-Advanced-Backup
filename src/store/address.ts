@@ -16,7 +16,7 @@ import type { DeleteResult } from '../core/types';
 import { legacyHasSave } from '../core/legacy';
 import { clearDatabase, databases } from './idb';
 import { writeDatabase, type DbDump } from './idb/dump';
-import { readKey, readLocal, readSession, removeKeys, writeKey } from './local';
+import { listStorageKeys, readKey, removeKeys, writeKey, type StorageKind } from './local';
 import {
   deleteModValue,
   modKeys,
@@ -25,7 +25,7 @@ import {
   writeModList,
   writeModValue,
 } from './mods';
-import { deleteSaveSlot, detailTime, gameDbName, readDetails, readLegacy, readSaves, writeLegacy, writeSaves } from './saves';
+import { deleteSaveSlot, detailTime, gameDbName, listSaveSlots, readDetails, readLegacy, writeLegacy, writeSaves } from './saves';
 
 /**
  * 地址 → 存储写入与删除。地址是唯一身份（`core/address.ts`），这一层只管「把它写回去 / 删掉 / 列出来」，
@@ -166,87 +166,95 @@ export async function removeAddr(addr: string): Promise<DeleteResult> {
   }
 }
 
+export interface ListAddrOptions {
+  claimed?: ReadonlySet<string>;
+  /** 已成功采集的数据域；失败时仍从存储补列现有地址。 */
+  completed?: ReadonlySet<string>;
+  /** 可复用扫描当轮的低成本数据；独立调用仍从存储枚举。 */
+  storageKeys?: (kind: StorageKind) => readonly string[];
+  modNames?: () => ReturnType<typeof readModNames>;
+  modLists?: () => ReturnType<typeof readIdbModLists>;
+}
+
 /**
- * 枚举本机全部地址。执行开销必须低：它为「其他」采集与镜像提供基数，
- * 每次导入都运行，不能读取几百 MB 的模组包。
+ * 枚举本机地址。兜底先减掉已认领的地址，再读值或计量；未传认领集时枚举所有地址。
  */
-export async function listAddrs(): Promise<AddrInfo[]> {
+export async function listAddrs({
+  claimed,
+  completed,
+  storageKeys = listStorageKeys,
+  modNames = readModNames,
+  modLists = readIdbModLists,
+}: ListAddrOptions = {}): Promise<AddrInfo[]> {
   const out: AddrInfo[] = [];
 
-  for (const entry of readLocal()) {
-    out.push({
-      addr: lsAddr(entry.key),
-      label: entry.key,
-      bytes: keyBytes(entry.key, entry.value),
-    });
-  }
-  for (const entry of readSession()) {
-    out.push({
-      addr: ssAddr(entry.key),
-      label: entry.key,
-      bytes: keyBytes(entry.key, entry.value),
-    });
-  }
-  const legacy = readLegacy();
-  // 与采集器同一条判据：只有列表元信息的空壳不算一份存档，回退路径不应把它重新列出
-  if (legacyHasSave(legacy.saves)) {
-    out.push({
-      addr: LEGACY_SAVE_ADDR,
-      label: LEGACY_SAVE_ADDR,
-      bytes: keyBytes(legacy.saves, legacy.details),
-    });
-  }
-
-  // 下面几段都可能因宿主接口抛错而整段失败：枚举结果是回退数据来源，
-  // 取不到时只是少几项，不应让一个出错的库清空整棵树。
-  await attempt(async () => {
-    const [saves, details] = await Promise.all([readSaves(), readDetails()]);
-    const detailBySlot = new Map(details.map(record => [record.slot, record]));
-    for (const record of saves) {
-      const detail = detailBySlot.get(record.slot);
-      out.push({
-        addr: saveAddr(record.slot),
-        label: String(record.slot),
-        ...(detail ? { mtime: detailTime(detail) } : {}),
-      });
+  for (const kind of ['local', 'session'] as const) {
+    for (const key of storageKeys(kind)) {
+      const addr = kind === 'local' ? lsAddr(key) : ssAddr(key);
+      if (claimed?.has(addr)) continue;
+      const value = readKey(key, kind);
+      if (value !== null) out.push({ addr, label: key, bytes: keyBytes(key, value) });
     }
-  });
+  }
+  if (!claimed?.has(LEGACY_SAVE_ADDR)) {
+    const legacy = readLegacy();
+    // 与采集器同一条判据：只有列表元信息的空壳不算一份存档。
+    if (legacyHasSave(legacy.saves)) {
+      out.push({ addr: LEGACY_SAVE_ADDR, label: LEGACY_SAVE_ADDR, bytes: keyBytes(legacy.saves, legacy.details) });
+    }
+  }
+
+  // 宿主接口失败时只是少几项，不应让一个出错的库清空整棵树。
+  if (!completed?.has('saves')) {
+    await attempt(async () => {
+      const slots = (await listSaveSlots()).filter(slot => !claimed?.has(saveAddr(slot)));
+      if (slots.length === 0) return;
+      // 详情读不到仍列出槽位，不把可见的存档一起丢掉。
+      const details = await attempt(readDetails) ?? [];
+      const detailBySlot = new Map(details.map(record => [record.slot, record]));
+      for (const slot of slots) {
+        const detail = detailBySlot.get(slot);
+        out.push({ addr: saveAddr(slot), label: String(slot), ...(detail ? { mtime: detailTime(detail) } : {}) });
+      }
+    });
+  }
 
   await attempt(async () => {
-    // 库名可能被 loaderKeyConfig 改过，按加载器现在的名字跳过
+    // 这两个库由存档域与模组域细分，不再作为整库出现；加载器库名可能改过。
     const skip = new Set([gameDbName(), modKeys().db]);
     for (const database of await databases()) {
-      // 这两个库由存档域与模组域深读成更细的条目，不再作为整库出现
-      if (skip.has(database.name)) continue;
-      out.push({ addr: idbAddr(database.name), label: database.name });
+      const addr = idbAddr(database.name);
+      if (skip.has(database.name) || claimed?.has(addr)) continue;
+      out.push({ addr, label: database.name });
     }
   });
 
   await attempt(async () => {
-    const lists = await readIdbModLists();
-    if (lists.orderPresent && lists.orderValid) {
+    const lists = await modLists();
+    if (!claimed?.has(MOD_ORDER_ADDR) && lists.orderPresent && lists.orderValid) {
       out.push({ addr: MOD_ORDER_ADDR, label: MOD_ORDER_ADDR, count: lists.enabled.length });
     }
-    if (lists.hiddenPresent && lists.hiddenValid) {
+    if (!claimed?.has(MOD_HIDDEN_ADDR) && lists.hiddenPresent && lists.hiddenValid) {
       out.push({ addr: MOD_HIDDEN_ADDR, label: MOD_HIDDEN_ADDR, count: lists.hidden.length });
     }
   });
 
   await attempt(async () => {
-    const names = await readModNames();
+    const names = await modNames();
     for (const name of new Set([...names.idb, ...names.local])) {
-      out.push({ addr: modAddr(name), label: name });
+      const addr = modAddr(name);
+      if (!claimed?.has(addr)) out.push({ addr, label: name });
     }
   });
 
   return out;
 }
 
-async function attempt(run: () => Promise<void>): Promise<void> {
+async function attempt<T>(run: () => Promise<T>): Promise<T | undefined> {
   try {
-    await run();
+    return await run();
   } catch (error) {
     console.warn('[AdvancedBackup] 枚举地址失败', error);
+    return undefined;
   }
 }
-

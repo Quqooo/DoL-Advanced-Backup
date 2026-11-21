@@ -1,4 +1,4 @@
-import { messageError, messageOf } from '../core/error';
+import { abortError, messageError, messageOf, throwIfAborted } from '../core/error';
 import type { Category, RestoreMode } from '../core/types';
 import type { Item } from '../core/item';
 import { base64ToBytes } from '../core/format';
@@ -11,7 +11,8 @@ import type { RestoreFailure, RestorePlan } from '../restore/types';
 import { clearPackMapping, setPackMapping } from '../core/mapping';
 import { readPackMapping } from '../core/mapping/pack';
 import { openBundle, type Bundle } from '../restore/bundle';
-import { forecastDeletions, mirrorScopeOf, planRestore } from '../restore/plan';
+import { planRestore } from '../restore/plan';
+import { countDeletions, prepareMirror } from '../restore/plan/mirror';
 import { readPrefs } from '../store/prefs';
 import { useGameDb } from '../store/saves';
 import { autoSnapshot } from '../snapshot/auto';
@@ -107,7 +108,12 @@ export async function inspectPackage(
   });
 }
 
-export type ImportBundleRequest = Omit<ImportRequest, 'source' | 'bytes'> & { bundle: Bundle };
+type ImportExecution = Omit<ImportRequest, 'source' | 'bytes'> & {
+  /** 面板按执行扫描的差集确认。编程接口直接执行，不弹对话框。 */
+  confirmDeletions?: (deletions: Readonly<Partial<Record<Category, number>>>) => Promise<boolean>;
+};
+
+export type ImportBundleRequest = ImportExecution & { bundle: Bundle };
 
 let importRunning = false;
 
@@ -123,9 +129,15 @@ async function exclusiveImport<T>(task: () => Promise<T>): Promise<T> {
   }
 }
 
-/** 从已经打开好的包恢复：导出包里内嵌的恢复脚本用这条，省去重新序列化 zip */
+/** 恢复面板与内嵌脚本复用已打开的包。 */
 export async function importBundle(request: ImportBundleRequest): Promise<ImportResult> {
-  return exclusiveImport(() => runImport(request.bundle, request));
+  return exclusiveImport(async () => {
+    try {
+      return await runImport(request.bundle, request);
+    } finally {
+      request.bundle.releaseLegacyIdb?.();
+    }
+  });
 }
 
 export async function importPackage(request: ImportRequest): Promise<ImportResult> {
@@ -150,7 +162,7 @@ async function autoSnapshotWithChoice(scanned: Awaited<ReturnType<typeof scan>>)
   }
 }
 
-async function runImport(bundle: Bundle, request: Omit<ImportRequest, 'source' | 'bytes'>): Promise<ImportResult> {
+async function runImport(bundle: Bundle, request: ImportExecution): Promise<ImportResult> {
   await applyPackMapping(bundle);
   // 恢复包在 inject_early 阶段就跑到这里，`idb.init(Story.domId)` 可能还没执行：
   // 先等库名定下来，否则扫描的跳过名单与写入目标都会落在占位库上
@@ -191,7 +203,10 @@ async function runImport(bundle: Bundle, request: Omit<ImportRequest, 'source' |
       ...(request.selected ? { selected: new Set(request.selected) } : {}),
       ...(keepSelf ? {} : { keepSelf: false }),
       scanned,
-      onBeforeWrite: async () => {
+      onBeforeWrite: async (_plan, deletions) => {
+        if (request.confirmDeletions && Object.keys(deletions).length > 0
+          && !(await request.confirmDeletions(deletions))) throw abortError();
+        throwIfAborted(request.signal);
         // 恢复包自己跑恢复时不建回滚点：它是一次性的壳，恢复完就卸载自己，没有界面能用上这份快照；
         // 包里若带着快照库，随后的写入还会把它冲掉（`skipsDb` 的 selfPack 例外）。
         if (request.selfPack) return;
@@ -258,8 +273,5 @@ export function deletionsOf(
   selected: Iterable<string>,
   keepSelf: boolean,
 ): Partial<Record<Category, number>> {
-  // 与写入侧同一套判据：跳过条目本机有、包里没有，不能被算成待删
-  const picked = new Set([...selected, ...plan.protected]);
-  // 范围随模式与勾选变：干净是整机，覆盖只有三个分组，且整组未勾时不删
-  return forecastDeletions(plan.local, picked, keepSelf, mirrorScopeOf(plan.mode, plan.items, picked));
+  return countDeletions(prepareMirror(plan, new Set(selected), keepSelf).candidates);
 }

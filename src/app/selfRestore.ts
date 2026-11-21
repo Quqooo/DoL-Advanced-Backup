@@ -10,7 +10,7 @@ import { sha256Hex } from '../pack/blob';
 import { openBundle, type Bundle } from '../restore/bundle';
 import { bundleOfZip, isZipBundleUnreadable } from '../restore/zipbundle';
 import { importBundle, type ImportResult } from './import';
-import { findStoredPacks, removeStoredPackCopies, type StoredPack } from './packStore';
+import { findStoredPacks, identifyStoredPack, removeStoredPackCopies, type StoredPackIdentity } from './packStore';
 
 /**
  * 「可恢复包」：导出时把同一份 JS 内嵌进包里，用户把它当模组装进 ModLoader 就能恢复，
@@ -69,35 +69,25 @@ async function sameStoredPack(identity: PackIdentity, bytes: Uint8Array): Promis
   }
 }
 
-async function matchingStoredPacks(mod: SelfMod, packs: readonly StoredPack[]): Promise<StoredPack[]> {
+async function bundleFromStorage(mod: SelfMod): Promise<Bundle | null> {
+  let match: Bundle | null = null;
   try {
     const identity = await identityOf(mod);
-    const matches: StoredPack[] = [];
-    for (const pack of packs) if (await sameStoredPack(identity, pack.bytes)) matches.push(pack);
-    return matches;
-  } catch {
-    return [];
-  }
-}
-
-async function bundleFromStorage(mod: SelfMod): Promise<Bundle | null> {
-  let packs: StoredPack[] = [];
-  try {
-    packs = await findStoredPacks();
+    for await (const { bytes } of findStoredPacks()) {
+      // 容器正常走内层字节入口；这里没有可验证的外层读路径就拒绝回退。
+      if (isModPack(bytes) || !await sameStoredPack(identity, bytes)) continue;
+      try {
+        const bundle = await openBundle(bytes);
+        if (match) return null;
+        match = bundle;
+      } catch {
+        // 匹配项无法作为恢复来源时继续检查其余候选，不按文件名选一个
+      }
+    }
   } catch {
     return null;
   }
-  // 容器正常走内层字节入口；这里没有可验证的外层读路径就拒绝回退。
-  const candidates = await matchingStoredPacks(mod, packs.filter(pack => !isModPack(pack.bytes)));
-  const matches: Bundle[] = [];
-  for (const pack of candidates) {
-    try {
-      matches.push(await openBundle(pack.bytes));
-    } catch {
-      // 匹配项无法作为恢复来源时继续检查其余候选，不按文件名选一个
-    }
-  }
-  return matches.length === 1 ? matches[0] : null;
+  return match;
 }
 
 /**
@@ -147,6 +137,14 @@ export function applyRestorePack(
  * 写后必须刷新页面才生效，调用方负责重载。
  */
 export async function dropRestorePack(pack: RestorePack): Promise<boolean> {
-  const matches = await matchingStoredPacks(pack.mod, await findStoredPacks());
+  const matches: StoredPackIdentity[] = [];
+  try {
+    const identity = await identityOf(pack.mod);
+    for await (const { bytes, name, layer } of findStoredPacks()) {
+      if (await sameStoredPack(identity, bytes)) matches.push(await identifyStoredPack({ name, layer }, bytes));
+    }
+  } catch {
+    return false;
+  }
   return removeStoredPackCopies(matches);
 }

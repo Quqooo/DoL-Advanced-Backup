@@ -6,14 +6,14 @@ import type { Item, ItemFlags, ItemKindId } from '../core/item';
 import { list as mappingList, matchesRule, selfEntry, type MappingEntry } from '../core/mapping';
 import { databases } from '../store/idb';
 import { measureDatabase } from '../store/idb/dump';
-import { readLocal, readSession, type StorageEntry } from '../store/local';
+import { readKey } from '../store/local';
 import { bootMetas } from './bootmetas';
 import { measuredDbItem } from './dbitem';
 import type { CollectContext, Collector, CollectResult } from './index';
 
-function pick(entries: readonly StorageEntry[], rules: MappingEntry['keys']): StorageEntry[] {
+function pick(keys: readonly string[], rules: MappingEntry['keys']): string[] {
   if (!rules?.length) return [];
-  return entries.filter(entry => rules.some(rule => matchesRule(rule, entry.key)));
+  return keys.filter(key => rules.some(rule => matchesRule(rule, key)));
 }
 
 /** 第二行：这条映射对上了哪个已装模组，显示它的 boot.json name */
@@ -24,8 +24,8 @@ function installedNameOf(entry: MappingEntry, metas: readonly BootMeta[]): strin
 export const modDataCollector: Collector = {
   name: 'moddata',
   async collect(ctx: CollectContext): Promise<CollectResult> {
-    const local = readLocal();
-    const session = readSession();
+    const local = ctx.storageKeys('local').filter(key => !ctx.claimed.has(lsAddr(key)));
+    const session = ctx.storageKeys('session').filter(key => !ctx.claimed.has(ssAddr(key)));
     const dbNames = (await databases()).map(item => item.name);
     const metas = [...bootMetas().values()];
     const self = selfEntry();
@@ -53,19 +53,22 @@ export const modDataCollector: Collector = {
       const flags = Object.keys(base).length > 0 ? base : undefined;
 
       // 静态键（成就、设置、安全开关）归各自的分组，映射表抢不走
-      const stored: readonly (readonly [ItemKindId, StorageEntry])[] = [
+      const stored: readonly (readonly [ItemKindId, string])[] = [
         ...keys.map(key => ['ls', key] as const),
         ...sessionHits.map(key => ['ss', key] as const),
       ];
       for (const [kind, entryKey] of stored) {
-        const addr = kind === 'ss' ? ssAddr(entryKey.key) : lsAddr(entryKey.key);
+        const addr = kind === 'ss' ? ssAddr(entryKey) : lsAddr(entryKey);
+        if (taken.has(addr)) continue;
         const group = groupOfKnown(addr, ctx.group);
         if (!group.startsWith('moddata/')) continue;
+        const value = readKey(entryKey, kind === 'ss' ? 'session' : 'local');
+        if (value === null) continue;
         add({
           addr,
           kind,
           group,
-          bytes: keyBytes(entryKey.key, entryKey.value),
+          bytes: keyBytes(entryKey, value),
           ...(installed ? { groupSub: installed } : {}),
           ...(flags ? { flags } : {}),
         });

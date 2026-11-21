@@ -1,40 +1,62 @@
 import { readModNames } from '../store/mods';
-import { findStoredPacks, type StoredPack } from './packStore';
+import {
+  identifyStoredPack, inspectStoredPacks, removeStoredPacks, storedPackLocations,
+  type StoredPack, type StoredPackIdentity,
+} from './packStore';
 
-/**
- * 盯着「有没有自恢复包被当成模组装进来」。
- *
- * 装模组要重载才生效，但写入存储是立刻发生的——所以正本可以在用户还在这局游戏里的时候
- * 就发现它，不必等重载。先比名字（IDB 侧只列键名，不读值，便宜），出现新名字才去读内容确认。
- */
+/** 先按层比名字；只有未检查的键才读内容。同层同名替换不靠定时全量读来发现。 */
 const INTERVAL = 5000;
-
 let timer: number | null = null;
 
-/** 恢复包自己的对话框在，说明它正在处理，此时不接管 */
-function occupied(): boolean {
-  return Boolean(document.querySelector('[data-advbk-boot]'));
+/** 不覆盖恢复包或宿主当前的对话框。 */
+function ready(): boolean {
+  return document.visibilityState !== 'hidden' && !document.querySelector('[data-advbk-boot], #ui-dialog.open');
 }
 
-export function startPackWatch(onFound: (packs: StoredPack[]) => void): void {
+export function startPackWatch(onFound: (pack: StoredPack, removed: boolean) => void | Promise<void>): void {
   if (timer !== null) return;
-  // null = 还没跑过：第一轮要全量扫，重载前就装好又没能自己弹出来的包也在里面
-  let known: Set<string> | null = null;
+  const known = { idb: new Set<string>(), local: new Set<string>() };
+  let running = false;
+  // 删除时窗口可能切到后台；已取下的包留到能交接时再展示。
+  let pending: StoredPack | null = null;
 
   const tick = async (): Promise<void> => {
-    if (document.visibilityState === 'hidden') return;
+    if (!ready()) return;
+    if (pending) {
+      const pack = pending;
+      pending = null;
+      await onFound(pack, true);
+      return;
+    }
+
     const names = await readModNames();
-    const all = [...names.idb, ...names.local];
-    const fresh = known === null ? null : all.filter(name => !known!.has(name));
-    known = new Set(all);
-    if (occupied()) return;
-    if (fresh !== null && fresh.length === 0) return;
-    // 第一轮没有「新名字」可依，全量看一遍；之后只看这一轮新出现的，避免为装一个普通模组重读整库
-    const packs = await findStoredPacks(fresh ?? undefined);
-    if (packs.length > 0) onFound(packs);
+    if (!ready()) return;
+    const current = { idb: new Set(names.idb), local: new Set(names.local) };
+    for (const layer of ['idb', 'local'] as const) {
+      // 库没打开不代表这一层的旧条目消失了。
+      if (layer === 'idb' && !names.opened) continue;
+      for (const name of known[layer]) if (!current[layer].has(name)) known[layer].delete(name);
+    }
+    const fresh = storedPackLocations(names).filter(({ layer, name }) => !known[layer].has(name));
+    const packs: StoredPackIdentity[] = [];
+    for await (const { location, bytes } of inspectStoredPacks(fresh, true)) {
+      if (!ready()) return;
+      if (bytes) packs.push(await identifyStoredPack(location, bytes));
+      else known[location.layer].add(location.name);
+    }
+    const { first, checked } = await removeStoredPacks(packs, ready);
+    for (const { layer, name } of checked) known[layer].add(name);
+    if (!first) return;
+    if (ready()) await onFound(first.pack, first.removed);
+    else if (first.removed) pending = first.pack;
+    else known[first.pack.layer].delete(first.pack.name);
   };
 
   timer = window.setInterval(() => {
-    void tick().catch(error => console.warn('[AdvancedBackup] 检查自恢复包失败', error));
+    if (running) return;
+    running = true;
+    return tick()
+      .catch(error => console.warn('[AdvancedBackup] 检查自恢复包失败', error))
+      .finally(() => { running = false; });
   }, INTERVAL);
 }

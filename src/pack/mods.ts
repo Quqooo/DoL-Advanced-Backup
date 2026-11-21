@@ -1,5 +1,5 @@
 import { readBootMeta, type BootMeta } from '../core/bootmeta';
-import { messageError } from '../core/error';
+import { messageError, throwIfAborted } from '../core/error';
 import { base64ToBytes, hex32 } from '../core/format';
 import { isModPack } from '../core/modpack';
 import { uniqueFileName, type TakenName } from '../core/naming';
@@ -18,6 +18,8 @@ export interface ModPlan {
   bytes: number;
   /** 第一趟算出的内容哈希：第二趟读回来必须一致 */
   sha256: string;
+  /** 只在第二趟指纹一致后复用；不必为 ZIP 再扫描模组字节。 */
+  crc: number;
 }
 
 export interface ModRead {
@@ -62,27 +64,32 @@ export async function planMods(
   reader: ModReader,
   injected: () => Promise<Map<string, Uint8Array>>,
   onProgress?: (ratio: number) => void,
+  signal?: AbortSignal,
 ): Promise<{ plans: ModPlan[]; items: ManifestModItem[] }> {
   const used = new Map<string, TakenName>();
-  const byHash = new Map<string, { file: string; crc32: string }>();
+  const byHash = new Map<string, { file: string; crc: number }>();
   const plans: ModPlan[] = [];
   const items: ManifestModItem[] = [];
 
   for (const [index, name] of names.entries()) {
+    throwIfAborted(signal);
     const found = await readMod(reader, name, injected);
+    throwIfAborted(signal);
     if (!found) throw messageError('packSelectionMissing', name);
     const sha256 = await sha256Hex(found.bytes);
+    throwIfAborted(signal);
     const boot = await readBoot(found.bytes);
+    throwIfAborted(signal);
     const known = byHash.get(sha256);
     // 同一份字节被多个存储名引用时只算一次 CRC：大模组包重算一遍不值
-    const crc = known ? known.crc32 : hex32(crc32(found.bytes));
+    const crc = known?.crc ?? crc32(found.bytes);
     // 容器格式进文件名：ModPack 用 .modpack，其余用 .zip，一眼能分开
     const ext = isModPack(found.bytes) ? '.modpack' : '.zip';
     // 读不出名字的包（坏包）使用存储名，避免文件名只剩哈希
     const file = known?.file ?? `mods/${uniqueFileName(boot.name ?? name, sha256, used, ext)}`;
     if (!known) {
-      byHash.set(sha256, { file, crc32: crc });
-      plans.push({ stored: name, file, bytes: found.bytes.length, sha256 });
+      byHash.set(sha256, { file, crc });
+      plans.push({ stored: name, file, bytes: found.bytes.length, sha256, crc });
     }
     items.push({
       name: boot.name ?? name.replace(/\.(modpack|zip)$/i, ''),
@@ -93,11 +100,12 @@ export async function planMods(
       sha256,
       bytes: found.bytes.length,
       // 与中央目录里的 CRC 对照：恢复页不解压模组包就能发现错配
-      crc32: crc,
+      crc32: hex32(crc),
       origin: found.origin,
       ...(found.shadow ? { shadow: 'localstorage' as const } : {}),
     });
-    if (names.length > 0) onProgress?.((index + 1) / names.length);
+    onProgress?.((index + 1) / names.length);
+    throwIfAborted(signal);
   }
 
   return { plans, items };

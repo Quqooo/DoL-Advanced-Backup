@@ -127,15 +127,15 @@ export async function retryCollector(name: string): Promise<ScanResult | null> {
   };
 
   try {
-    const group = makeGroupContext(currentOrigin());
+    const ctx = contextOf(claimedAddrs(next), makeGroupContext(currentOrigin()));
     if (name === 'other') {
       // `other` 组不产出认领，重跑只需重新计算一次差集
-      next.items.push(...(await collectLeftover(claimedAddrs(next), group)));
+      next.items.push(...(await collectLeftover(ctx)));
     } else {
       // 先收进临时结果：这组新认领的地址可能已经在 `other` 里有一份同地址条目。
       // 认领只在扫描开头计算一次，重试后不会自动移除 `other` 中的同名条目，因此在这里移除。
       const produced: Item[] = [];
-      absorb(await collector.collect(contextOf(claimedAddrs(next), group)), { items: produced, claims: next.claims });
+      absorb(await collector.collect(ctx), { items: produced, claims: next.claims });
       next.items = mergeRetried(next.items, produced);
     }
     delete next.errors[name];

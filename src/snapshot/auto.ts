@@ -1,7 +1,7 @@
 import type { ScanResult } from '../core/item';
 import { messageError } from '../core/error';
 import { deleteSnapshot, listSnapshots } from '../store/snapshots';
-import { createSnapshot, incompleteGroups, type SnapshotMeta } from './index';
+import { createSnapshot, incompleteGroups, isSnapshotItem, type SnapshotMeta } from './index';
 import { AUTO_KEEP } from '../core/constants';
 
 export { AUTO_KEEP } from '../core/constants';
@@ -31,7 +31,7 @@ export async function autoSnapshot(input: AutoSnapshotInput): Promise<AutoSnapsh
   // 这一步必须在「空扫描」判断之前：失败的分组也会让条目为空，那种空不是「本机没有数据」。
   const failed = incompleteGroups(input.scanned);
   if (failed > 0) throw messageError('snapshotIncomplete', failed);
-  if (input.scanned.items.length === 0) return { meta: null };
+  if (!input.scanned.items.some(isSnapshotItem)) return { meta: null };
   const meta = await createSnapshot({
     kind: 'auto',
     scanned: input.scanned,

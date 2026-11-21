@@ -7,10 +7,10 @@ import type { RestoreMode } from '../../core/types';
 import { isNewer } from '../../core/version';
 import { currentOrigin } from '../../host/env';
 import type { Bundle } from '../bundle';
-import type { ModsSection, PackageSections, RestorePlan, RestoreWarning } from '../types';
+import type { PackageSections, RestorePlan, RestoreWarning } from '../types';
 import { itemsOfIndex, itemsOfLists, itemsOfMods } from './items';
 
-import { readSections } from './sections';
+import { readModsSection, readSections } from './sections';
 
 export { itemsOfPackage, modAddrOf, storedNameOf } from './items';
 export { forecastDeletions, mirrorCandidates, mirrorScopeOf, type MirrorScope } from './mirror';
@@ -99,9 +99,8 @@ export async function planRestore(input: {
   emit(mods);
 
   // 排序与禁用列表只有两份字符串数组，继续解压它；索引里不为它留字段
-  if (bundle.has('mods.json')) {
-    emit(itemsOfLists(await bundle.readJson<ModsSection>('mods.json'), ctx));
-  }
+  const lists = await readModsSection(bundle);
+  if (lists) emit(itemsOfLists(lists, ctx));
   input.onProgress?.(1);
 
   const available = new Set(items.map(item => item.addr));

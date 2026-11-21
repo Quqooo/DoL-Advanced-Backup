@@ -3,14 +3,14 @@ import { textByteLength } from '../core/format';
 import { groupOfKnown } from '../core/group';
 import type { Item } from '../core/item';
 import { SAFE_MODE_KEYS } from '../core/keys';
-import { modKeys, readIdbModLists } from '../store/mods';
+import { modKeys } from '../store/mods';
 import type { CollectContext, Collector, CollectResult } from './index';
 import { keyItem } from './keylist';
 
 export const modStateCollector: Collector = {
   name: 'modstate',
   async collect(ctx: CollectContext): Promise<CollectResult> {
-    const lists = await readIdbModLists();
+    const lists = await ctx.modLists();
     // 键名可被 loaderKeyConfig 改掉，明细里写实际的那一份
     const keys = modKeys();
     const items: Item[] = [];

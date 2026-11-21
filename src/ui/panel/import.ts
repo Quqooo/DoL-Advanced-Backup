@@ -1,4 +1,4 @@
-import { deletionsOf, importPackage, inspectPackage } from '../../app/import';
+import { deletionsOf, importBundle, inspectPackage } from '../../app/import';
 import { resetScan } from '../../app/session';
 import { snapshotList, snapshotSource } from '../../app/snapshots';
 import { byteLengthOf, formatBytes, formatDateTime } from '../../core/format';
@@ -148,8 +148,6 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
   const progress = createProgress();
   const notices = createNotices();
 
-  // 来源可能是 Blob：外部文件与快照 payload 都按需切片读，不先展开成整份字节
-  let source: Uint8Array | Blob | null = null;
   let plan: RestorePlan | null = null;
   /**
    * 来源代次：读包是异步的，而用户在读完之前可以再选一个文件或快照。
@@ -165,7 +163,7 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
     const locked = gate.current() !== null;
     pickFile.disabled = locked;
     snapshotSelect.disabled = locked;
-    start.disabled = locked || source === null || plan === null;
+    start.disabled = locked || plan === null;
     for (const button of modeButtons.values()) button.disabled = locked;
     autoBox.disabled = locked;
     keepSelfBox.disabled = locked;
@@ -259,7 +257,6 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
   }
 
   function clearSource(): void {
-    source = null;
     plan = null;
     renderPlan();
   }
@@ -273,7 +270,6 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
   async function load(next: Uint8Array | Blob, name: string, run = beginSource()): Promise<void> {
     // 迟到的调用（例如快照 payload 读得比后一次选择还慢）不得改任何状态
     if (!sourceRun.current(run)) return;
-    source = next;
     plan = null;
     syncLocked();
     // 「读取包…」属于来源那一块：放在别处会离它太远，用户不知道在读什么
@@ -306,7 +302,6 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
       tree.applyPreset('full');
     } catch (error) {
       if (!sourceRun.current(run)) return;
-      source = null;
       summary.hidden = true;
       warningNote.hidden = true;
       tree.setItems([]);
@@ -398,44 +393,38 @@ export function createImportPane(deps: ImportPaneDeps): ImportPane {
   });
 
   start.addEventListener('click', () => {
-    if (!source || !plan || gate.current() !== null) return;
-    const current = plan;
-    const payload = source;
-    // 模式也取一份快照：预告、二次确认与执行必须是同一个模式
+    if (!plan || gate.current() !== null) return;
+    const bundle = plan.bundle;
+    // 确认和写入使用点击时的模式与勾选地址。
     const currentMode = mode;
     // 勾选集就是这次的恢复范围：干净恢复也照它删，四种模式没有第二条通道
     const selected = [...tree.selection()];
     const keepSelf = keepSelfBox.checked;
     void (async () => {
-      const forecast = deletionsOf(current, selected, keepSelf);
-      const deletions = Object.values(forecast).reduce<number>((sum, count) => sum + (count ?? 0), 0);
-      if (deletions > 0) {
-        // 有删除就先确认；未识别数据可能装着同域其他应用的东西，单独多一句提醒
-        const other = forecast.other ?? 0;
-        const ok = await confirmDialog({
-          title: MODE_TEXT[currentMode](),
-          body: `<p>${t().deletableCount(deletions)}</p>${other > 0 ? `<p>${t().confirmOther(other)}</p>` : ''}`,
-          okLabel: t().startRestore,
-          cancelLabel: t().cancelAction,
-        });
-        if (!ok) {
-          toast(t().cancelled);
-          return;
-        }
-      }
-      // 确认框是异步的，回来时可能已经有别的任务占住锁
+      // 从重扫到确认和写入都持有任务锁。
       const release = gate.take('restore');
       if (!release) return;
       notices.clear();
       const signal = progress.begin();
       try {
-        const result = await importPackage({
-          source: payload,
+        const result = await importBundle({
+          bundle,
           mode: currentMode,
           selected,
           keepSelf,
           signal,
           onProgress: progress.show,
+          confirmDeletions: counts => {
+            const deletions = Object.values(counts).reduce<number>((sum, count) => sum + (count ?? 0), 0);
+            // 未识别的数据可能属于同源的其他应用。
+            const other = counts.other ?? 0;
+            return confirmDialog({
+              title: MODE_TEXT[currentMode](),
+              body: `<p>${t().deletableCount(deletions)}</p>${other > 0 ? `<p>${t().confirmOther(other)}</p>` : ''}`,
+              okLabel: t().startRestore,
+              cancelLabel: t().cancelAction,
+            });
+          },
         });
         toast([
           t().imported(result.applied, result.skipped, result.failed),

@@ -18,8 +18,7 @@ export const otherCollector: Collector = {
   async collect(ctx: CollectContext): Promise<CollectResult> {
     const items: Item[] = [];
 
-    for (const info of await listAddrs()) {
-      if (ctx.claimed.has(info.addr)) continue;
+    for (const info of await listAddrs(ctx)) {
       const scheme = schemeOf(info.addr);
       const kind = kindOfAddr(info.addr);
       if (!kind) continue;

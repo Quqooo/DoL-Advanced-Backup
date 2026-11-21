@@ -1,6 +1,8 @@
 import { makeGroupContext, type GroupContext } from '../core/group';
 import type { Item, ScanResult } from '../core/item';
 import { currentOrigin } from '../host/env';
+import { listStorageKeys, type StorageKind } from '../store/local';
+import { readIdbModLists, readModNames } from '../store/mods';
 import { imagePackCollector } from './imagepacks';
 import { progressCollector, sessionCollector, settingsCollector } from './keys';
 import { modDataCollector } from './moddata';
@@ -13,6 +15,12 @@ import { savesCollector } from './saves';
 export interface CollectContext {
   /** 已被前面采集器认领的地址，`other` 用来排除 */
   claimed: ReadonlySet<string>;
+  /** 本轮已成功采集的组；失败时仍由 other 尝试枚举。 */
+  completed: ReadonlySet<string>;
+  /** 仅在一轮采集内共享轻量读取结果，不保留任何 Web Storage 值或模组包。 */
+  storageKeys(kind: StorageKind): readonly string[];
+  modNames(): ReturnType<typeof readModNames>;
+  modLists(): ReturnType<typeof readIdbModLists>;
   /** 分组上下文：映射表与域名层，扫描与读包共用同一份 */
   group: GroupContext;
 }
@@ -48,8 +56,28 @@ export function collectorNamed(name: string): Collector | undefined {
   return ALL.find(item => item.name === name);
 }
 
-export function contextOf(claimed: ReadonlySet<string>, group: GroupContext): CollectContext {
-  return { claimed, group };
+function sharedRead<T>(read: () => Promise<T>): () => Promise<T> {
+  let pending: Promise<T> | undefined;
+  return () => pending ??= read().catch(error => {
+    // 读失败不是空结果，也不能阻止后面的采集器重新尝试。
+    pending = undefined;
+    throw error;
+  });
+}
+
+export function contextOf(
+  claimed: ReadonlySet<string>, group: GroupContext, completed: ReadonlySet<string> = new Set(),
+): CollectContext {
+  const keys: Partial<Record<StorageKind, string[]>> = {};
+  const storageKeys = (kind: StorageKind): readonly string[] => keys[kind] ??= listStorageKeys(kind);
+  return {
+    claimed,
+    completed,
+    group,
+    storageKeys,
+    modNames: sharedRead(() => readModNames(storageKeys('local'))),
+    modLists: sharedRead(readIdbModLists),
+  };
 }
 
 /**
@@ -87,12 +115,15 @@ export async function collectAll(onBatch?: (items: readonly Item[]) => void): Pr
   const claims: Record<string, string[]> = {};
   /** 认领集只增不减：增量维护，不必在每个采集器前把全部认领重建一遍 */
   const claimed = new Set<string>();
+  const completed = new Set<string>();
+  const ctx = contextOf(claimed, group, completed);
 
   for (const collector of ORDER) {
     try {
-      const result = await collector.collect(contextOf(claimed, group));
+      const result = await collector.collect(ctx);
       const from = items.length;
       absorb(result, { items, claims });
+      completed.add(collector.name);
       for (const addr of claims[collector.name] ?? []) claimed.add(addr);
       if (items.length > from) onBatch?.(items.slice(from));
     } catch (error) {
@@ -102,7 +133,7 @@ export async function collectAll(onBatch?: (items: readonly Item[]) => void): Pr
 
   // `other` 处理「枚举结果 − 已认领」，其产出不计入认领，否则重试时会被自己排除
   try {
-    const leftover = await collectLeftover(claimed, group);
+    const leftover = await collectLeftover(ctx);
     items.push(...leftover);
     if (leftover.length > 0) onBatch?.(leftover);
   } catch (error) {
@@ -113,7 +144,7 @@ export async function collectAll(onBatch?: (items: readonly Item[]) => void): Pr
 }
 
 /** 单独运行 `other` 组：单组重试与 collectAll 共用同一条路径 */
-export async function collectLeftover(claimed: ReadonlySet<string>, group: GroupContext): Promise<Item[]> {
-  const result = await otherCollector.collect(contextOf(claimed, group));
+export async function collectLeftover(ctx: CollectContext): Promise<Item[]> {
+  const result = await otherCollector.collect(ctx);
   return result.items.map(item => ({ ...item, collector: 'other' }));
 }
